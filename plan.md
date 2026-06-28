@@ -1502,7 +1502,67 @@ Database tables created.
 
 ```bash
 cd ~/Desktop/full-stack-demo
-docker compose exec postgres psql -U demo_user -d fullstack_demo
+docker compose exec postgres psql -U archer -d fullstack_demo
+```
+
+这句命令的作用是：进入 Docker 里的 PostgreSQL 数据库，并打开 PostgreSQL 的命令行工具，方便你检查数据库里有没有成功创建表。
+
+拆开解释：
+
+```txt
+docker compose
+```
+
+- 使用当前项目里的 `docker-compose.yml`。
+- 这个文件里定义了本地 PostgreSQL 服务。
+
+```txt
+exec
+```
+
+- 在一个已经运行中的容器里执行命令。
+- 注意：它不是启动新容器，而是进入现有的 PostgreSQL 容器执行命令。
+
+```txt
+postgres
+```
+
+- 这是 `docker-compose.yml` 里定义的服务名。
+- 表示要进入 `postgres` 这个数据库服务容器。
+
+```txt
+psql
+```
+
+- PostgreSQL 自带的命令行客户端。
+- 可以理解成数据库版的“终端”。
+- 进入后可以执行 `\dt` 查看表、执行 SQL 查询等。
+
+```txt
+-U archer
+```
+
+- 指定用哪个数据库用户登录。
+- 这里的 `archer` 来自 `docker-compose.yml` 里的 `POSTGRES_USER`。
+
+```txt
+-d fullstack_demo
+```
+
+- 指定要连接哪个数据库。
+- 这里的 `fullstack_demo` 来自 `docker-compose.yml` 里的 `POSTGRES_DB`。
+
+所以整句可以读成：
+
+```txt
+在 postgres 这个 Docker 服务容器里，使用 psql，
+以 archer 用户连接 fullstack_demo 数据库。
+```
+
+如果执行成功，终端会进入 PostgreSQL 交互模式，一般会看到类似：
+
+```txt
+fullstack_demo=#
 ```
 
 进入 PostgreSQL 后执行：
@@ -1534,3 +1594,2866 @@ feedbacks
 4. 执行 `python -m app.db.init_db`。
 5. 进入 PostgreSQL 执行 `\dt`。
 6. 把结果发给我。
+
+## 第 11 步：创建接口数据类型 Schema
+
+这一步先创建 Pydantic Schema，也就是接口的请求和响应数据类型。
+
+原因：数据库表已经有了，下一步要写 FastAPI 接口。接口需要清楚规定：
+
+- 前端请求时要传什么字段。
+- 后端返回时会返回什么字段。
+- 哪些字段是新增时需要的。
+- 哪些字段是更新时可选的。
+
+前端类比：
+
+- Pydantic Schema 有点像 TypeScript 里的 `type` 或 `interface`。
+- 例如前端会写：
+
+```ts
+type AppSetting = {
+  code: string
+  name: string
+  enabled: boolean
+}
+```
+
+后端这里用 Pydantic 来做类似的事情。
+
+注意：
+
+- SQLAlchemy Model 描述“数据库表长什么样”。
+- Pydantic Schema 描述“接口传输的数据长什么样”。
+- 它们很像，但职责不同。
+
+### 先理解：为什么 Model 和 Schema 要分开
+
+后端项目里经常会同时出现两类“数据结构”：
+
+```txt
+SQLAlchemy Model
+Pydantic Schema
+```
+
+它们名字都像“模型”，但作用完全不同。
+
+#### SQLAlchemy Model：给数据库看的
+
+比如第 10 步写的：
+
+```python
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+```
+
+它关心的是：
+
+- 数据库表名叫什么。
+- 每一列是什么数据库类型。
+- 哪些字段不能为空。
+- 哪些字段是主键、外键、索引。
+- 表和表之间是什么关系。
+
+前端类比：
+
+- SQLAlchemy Model 更像“数据库建表说明书”。
+- 它不是直接给前端看的。
+
+#### Pydantic Schema：给接口看的
+
+这一步要写的：
+
+```python
+class ChatSessionRead(BaseModel):
+    id: int
+    title: str
+```
+
+它关心的是：
+
+- 前端请求接口时，body 里应该传什么字段。
+- 后端返回 JSON 时，应该返回什么字段。
+- 字段类型是否正确。
+- 哪些字段可以不传。
+- 返回数据库对象时，如何转换成 JSON。
+
+前端类比：
+
+- Pydantic Schema 更像 TypeScript 里的接口类型。
+- 它定义的是“前后端通信的数据形状”。
+
+#### 为什么不能只用 SQLAlchemy Model
+
+理论上很多字段名一样，看起来好像可以只写一份。但实际开发里最好分开，原因是：
+
+1. 数据库字段不一定都要暴露给前端。
+2. 创建数据时，不应该让前端传 `id`、`created_at` 这种数据库自动生成的字段。
+3. 更新数据时，通常只允许更新部分字段。
+4. 返回数据时，可能要附带关联数据，比如会话里带消息列表。
+
+所以我们会拆成几类 Schema：
+
+```txt
+Create  创建时前端传入的数据
+Read    后端返回给前端的数据
+Update  更新时前端传入的数据
+```
+
+### 先理解：Pydantic 是什么
+
+Pydantic 是 FastAPI 常用的数据校验库。
+
+它可以帮你做这些事：
+
+- 检查字段类型是否正确。
+- 把请求 JSON 转成 Python 对象。
+- 把 Python 对象转成响应 JSON。
+- 自动生成接口文档里的请求/响应结构。
+
+比如接口要求：
+
+```python
+class ChatSessionCreate(BaseModel):
+    title: str
+```
+
+如果前端传：
+
+```json
+{
+  "title": "新对话"
+}
+```
+
+这是合法的。
+
+如果前端传：
+
+```json
+{
+  "title": 123
+}
+```
+
+Pydantic 会发现类型不对，FastAPI 会返回参数校验错误。
+
+前端类比：
+
+- TypeScript 在写代码时帮你检查类型。
+- Pydantic 在接口运行时帮你检查请求数据。
+
+### 先理解：几个类型写法
+
+后面代码里会看到这些写法：
+
+```python
+str
+int
+bool
+datetime
+dict[str, Any]
+list[ChatMessageRead]
+str | None
+```
+
+解释：
+
+```python
+str
+```
+
+- 字符串。
+- 对应 JSON 里的字符串。
+
+```python
+int
+```
+
+- 整数。
+- 对应 JSON 里的数字。
+
+```python
+bool
+```
+
+- 布尔值。
+- 对应 JSON 里的 `true` / `false`。
+
+```python
+datetime
+```
+
+- 日期时间。
+- Pydantic 返回 JSON 时会转成类似 `2026-06-28T10:30:00` 的字符串。
+
+```python
+dict[str, Any]
+```
+
+- 字典。
+- `str` 表示 key 是字符串。
+- `Any` 表示 value 可以是任意类型。
+- 适合存 AI 回复里的表格、统计、图表配置这种结构不固定的数据。
+
+```python
+list[ChatMessageRead]
+```
+
+- 列表。
+- 列表里的每一项都是 `ChatMessageRead`。
+- 适合表示一个会话下面有多条消息。
+
+```python
+str | None
+```
+
+- 可以是字符串，也可以是空值。
+- 对应前端里大概是 `string | null`。
+
+```python
+= None
+```
+
+- 表示这个字段默认不传也可以。
+
+```python
+model_config = {"from_attributes": True}
+```
+
+- 允许 Pydantic 从 SQLAlchemy 对象属性里读取值。
+- 后面接口里从数据库查出来的是 SQLAlchemy 对象，不是普通 dict。
+- 加了这句以后，Pydantic 才能把它顺利转换成接口响应。
+
+### 11.1 创建智能问数 Schema
+
+创建文件：
+
+```txt
+backend/app/schemas/chat.py
+```
+
+写入：
+
+```python
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ChatMessageBase(BaseModel):
+    role: str
+    content: str
+
+
+class ChatMessageCreate(ChatMessageBase):
+    pass
+
+
+class ChatMessageRead(ChatMessageBase):
+    id: int
+    session_id: int
+    answer_data: dict[str, Any] | None = None
+    elapsed_ms: int | None = None
+    token_count: int | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ChatSessionCreate(BaseModel):
+    title: str
+
+
+class ChatSessionRead(BaseModel):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    messages: list[ChatMessageRead] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}
+```
+
+解释：
+
+- `BaseModel` 是 Pydantic 的基础类。
+- `ChatMessageCreate` 表示创建消息时前端要传的数据。
+- `ChatMessageRead` 表示后端返回消息时的数据。
+- `ChatSessionCreate` 表示创建会话时前端要传的数据。
+- `ChatSessionRead` 表示后端返回会话时的数据。
+- `model_config = {"from_attributes": True}` 允许 Pydantic 从 SQLAlchemy 对象里读取字段。
+
+逐段解释：
+
+```python
+from datetime import datetime
+```
+
+- 引入 Python 的日期时间类型。
+- `created_at`、`updated_at` 这些字段会用到。
+
+```python
+from typing import Any
+```
+
+- `Any` 表示任意类型。
+- AI 回复里的 `answer_data` 可能有表格、统计、图表、建议问题，不适合一开始写得太死，所以先用 `dict[str, Any]`。
+
+```python
+from pydantic import BaseModel, Field
+```
+
+- `BaseModel` 是所有 Pydantic Schema 的父类。
+- `Field(default_factory=list)` 用来给列表字段设置默认空列表。
+- 不直接写 `messages = []`，是为了避免可变默认值的问题。
+
+```python
+class ChatMessageBase(BaseModel):
+    role: str
+    content: str
+```
+
+- 这是消息的基础字段。
+- `role` 表示角色，比如 `user` 或 `assistant`。
+- `content` 表示消息正文。
+
+为什么叫 `Base`：
+
+- 因为创建消息和读取消息都会用到 `role`、`content`。
+- 抽一个基础类，可以减少重复。
+
+```python
+class ChatMessageCreate(ChatMessageBase):
+    pass
+```
+
+- 表示创建消息时需要的数据。
+- 它继承 `ChatMessageBase`，所以它拥有 `role` 和 `content`。
+- `pass` 表示这个类暂时不新增字段。
+
+前端请求创建消息时，大概会传：
+
+```json
+{
+  "role": "user",
+  "content": "北京代表处今年达成情况"
+}
+```
+
+```python
+class ChatMessageRead(ChatMessageBase):
+```
+
+- 表示后端返回消息时的数据。
+- 它也继承 `ChatMessageBase`，所以返回里也有 `role` 和 `content`。
+
+```python
+id: int
+session_id: int
+created_at: datetime
+```
+
+- 这些字段是数据库生成或数据库保存的字段。
+- 创建时前端不需要传。
+- 返回时前端需要看到。
+
+```python
+answer_data: dict[str, Any] | None = None
+elapsed_ms: int | None = None
+token_count: int | None = None
+```
+
+- 这些主要用于 AI 回复。
+- 用户消息没有这些数据，所以允许为空。
+
+```python
+class ChatSessionCreate(BaseModel):
+    title: str
+```
+
+- 创建会话时前端只需要传标题。
+- `id`、`created_at`、`updated_at` 都由数据库生成。
+
+```python
+class ChatSessionRead(BaseModel):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    messages: list[ChatMessageRead] = Field(default_factory=list)
+```
+
+- 返回会话时，会带上数据库里的完整信息。
+- `messages` 表示这个会话下的消息列表。
+- 第一版接口里可以选择是否真的返回 messages，但 Schema 先准备好。
+
+### 11.2 创建应用配置 Schema
+
+创建文件：
+
+```txt
+backend/app/schemas/setting.py
+```
+
+写入：
+
+```python
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel
+
+
+class AppSettingRead(BaseModel):
+    id: int
+    code: str
+    name: str
+    description: str
+    enabled: bool
+    config: dict[str, Any]
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AppSettingUpdate(BaseModel):
+    enabled: bool | None = None
+    config: dict[str, Any] | None = None
+```
+
+解释：
+
+- 配置项第一版不需要前端新增，只需要读取和修改。
+- 所以这里先定义 `AppSettingRead` 和 `AppSettingUpdate`。
+- `enabled` 和 `config` 都写成可选，是为了支持只改开关、或者只改配置内容。
+
+逐段解释：
+
+```python
+class AppSettingRead(BaseModel):
+```
+
+- 表示后端返回给前端的配置项。
+- 应用配置页要展示 6 个配置卡片，所以读取接口会返回一组 `AppSettingRead`。
+
+```python
+id: int
+code: str
+name: str
+description: str
+```
+
+- `id` 是数据库主键。
+- `code` 是配置编码，比如 `greeting`、`suggestions`、`tts`。
+- `name` 是展示名称，比如“对话开场白”。
+- `description` 是配置说明。
+
+```python
+enabled: bool
+```
+
+- 表示开关是否开启。
+- 前端可以用它控制 toggle 的选中状态。
+
+```python
+config: dict[str, Any]
+```
+
+- 存额外配置。
+- 不同配置项里面内容不一样，所以用 JSON 字典。
+
+例如：
+
+```json
+{
+  "text": "欢迎使用智能AI问数",
+  "questions": ["各产品线销售情况", "北京的产品线收入情况"]
+}
+```
+
+或者：
+
+```json
+{
+  "model_name": "gpt-4o-mini"
+}
+```
+
+```python
+class AppSettingUpdate(BaseModel):
+    enabled: bool | None = None
+    config: dict[str, Any] | None = None
+```
+
+- 表示更新配置时前端可以传的数据。
+- 两个字段都可以不传，所以写 `| None = None`。
+
+为什么更新 Schema 里没有 `name`、`description`：
+
+- 第一版应用配置页只让用户改开关和配置内容。
+- 配置名称、描述是系统预置的，不让前端随便改。
+
+更新开关时，前端可以只传：
+
+```json
+{
+  "enabled": false
+}
+```
+
+更新开场白时，前端可以传：
+
+```json
+{
+  "config": {
+    "text": "欢迎使用智能AI问数",
+    "questions": ["各产品线销售情况"]
+  }
+}
+```
+
+### 11.3 创建回复校对 Schema
+
+创建文件：
+
+```txt
+backend/app/schemas/feedback.py
+```
+
+写入：
+
+```python
+from datetime import datetime
+
+from pydantic import BaseModel
+
+
+class FeedbackCreate(BaseModel):
+    user_name: str
+    question: str
+    ai_answer: str
+    message_id: int | None = None
+
+
+class FeedbackRead(BaseModel):
+    id: int
+    user_name: str
+    question: str
+    ai_answer: str
+    status: str
+    remark: str | None = None
+    message_id: int | None = None
+    created_at: datetime
+    handled_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class FeedbackUpdate(BaseModel):
+    status: str | None = None
+    remark: str | None = None
+```
+
+解释：
+
+- `FeedbackCreate` 用于“数据有误/反馈”按钮创建反馈。
+- `FeedbackRead` 用于回复校对列表展示。
+- `FeedbackUpdate` 用于处理反馈时修改状态和备注。
+
+逐段解释：
+
+```python
+class FeedbackCreate(BaseModel):
+```
+
+- 表示创建反馈时前端要传的数据。
+- 对应智能问数页面里的“数据有误/反馈”按钮。
+
+```python
+user_name: str
+question: str
+ai_answer: str
+message_id: int | None = None
+```
+
+- `user_name`：谁提交的反馈。
+- `question`：用户当时问的问题。
+- `ai_answer`：AI 当时返回的答案摘要或正文。
+- `message_id`：如果这条反馈能关联到某条 AI 消息，就传消息 id；如果暂时没有，也允许为空。
+
+创建反馈时，前端大概会传：
+
+```json
+{
+  "user_name": "管理员",
+  "question": "北京代表处今年达成情况",
+  "ai_answer": "北京代表处整体同比下降3%...",
+  "message_id": 12
+}
+```
+
+```python
+class FeedbackRead(BaseModel):
+```
+
+- 表示后端返回反馈数据时的结构。
+- 回复校对列表和处理弹窗都会用它。
+
+```python
+status: str
+remark: str | None = None
+handled_at: datetime | None = None
+```
+
+- `status` 表示处理状态，例如 `pending` 或 `resolved`。
+- `remark` 是处理备注，未处理时可以为空。
+- `handled_at` 是处理时间，未处理时可以为空。
+
+```python
+class FeedbackUpdate(BaseModel):
+    status: str | None = None
+    remark: str | None = None
+```
+
+- 表示处理反馈时前端可以传的数据。
+- 处理时通常会把 `status` 改成 `resolved`，并填写 `remark`。
+
+例如：
+
+```json
+{
+  "status": "resolved",
+  "remark": "已核对，数据口径已修正"
+}
+```
+
+### 11.4 检查格式化
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m compileall app/schemas
+```
+
+解释：
+
+- `compileall` 会检查这些 Python 文件有没有语法错误。
+- 如果没有报错，说明 Schema 文件至少语法是正确的。
+- 它不会运行接口，也不会连接数据库。
+- 它只做 Python 语法层面的检查。
+
+如果成功，通常会看到类似：
+
+```txt
+Listing 'app/schemas'...
+Compiling 'app/schemas/chat.py'...
+Compiling 'app/schemas/feedback.py'...
+Compiling 'app/schemas/setting.py'...
+```
+
+如果某个文件有语法错误，它会告诉你文件名和行号。
+
+常见错误：
+
+```txt
+SyntaxError
+```
+
+- 说明 Python 语法写错了。
+- 常见原因是少了冒号、括号没闭合、缩进不对。
+
+```txt
+NameError
+```
+
+- `compileall` 阶段不一定会触发所有 `NameError`，但如果有导入执行，就可能看到。
+- 常见原因是用了 `Any` 却忘了 `from typing import Any`。
+
+```txt
+ImportError
+```
+
+- 说明导入失败。
+- 常见原因是虚拟环境没激活，或者依赖没安装。
+
+你现在要做：
+
+1. 创建 `backend/app/schemas/chat.py`。
+2. 创建 `backend/app/schemas/setting.py`。
+3. 创建 `backend/app/schemas/feedback.py`。
+4. 执行 `python -m compileall app/schemas`。
+5. 把结果发给我。
+
+## 第 12 步：创建数据库会话依赖
+
+这一步要在后端里准备一个 `get_db()` 函数。
+
+原因：前面已经完成了数据库连接、数据库表、接口 Schema。下一步要开始写真正的 FastAPI 接口，接口里会需要读写数据库。每次接口请求进来时，后端都需要：
+
+1. 打开一个数据库会话。
+2. 在接口里用这个会话查询或修改数据。
+3. 请求结束后关闭这个会话。
+
+这个流程如果每个接口都手写一遍，会很重复，也容易忘记关闭连接。所以 FastAPI 项目里通常会封装一个 `get_db()`，然后通过 `Depends(get_db)` 给接口使用。
+
+前端类比：
+
+- `SessionLocal()` 有点像创建一个“数据库请求客户端”。
+- `get_db()` 有点像给每个接口准备好一个可用的 API client。
+- `finally: db.close()` 有点像请求结束后做清理，避免资源一直占着。
+
+### 12.1 修改数据库连接文件
+
+修改文件：
+
+```txt
+backend/app/db/session.py
+```
+
+把它改成：
+
+```python
+from collections.abc import Generator
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.config import DATABASE_URL
+
+engine = create_engine(DATABASE_URL, echo=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def check_database_connection() -> bool:
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
+    return True
+```
+
+### 12.2 逐行解释
+
+```python
+from collections.abc import Generator
+```
+
+- 引入 `Generator` 类型。
+- 后面的 `get_db()` 会用到 `yield`，所以它不是普通函数，而是生成器函数。
+- 这里的 `Generator` 只是给类型标注用的。
+
+```python
+from sqlalchemy.orm import Session, sessionmaker
+```
+
+- `sessionmaker` 用来创建数据库会话工厂。
+- `Session` 表示一个数据库会话的类型。
+
+前端类比：
+
+- `sessionmaker` 像一个“创建数据库客户端的工厂函数”。
+- `Session` 像一次具体的数据库操作上下文。
+
+```python
+engine = create_engine(DATABASE_URL, echo=True)
+```
+
+- `engine` 是 SQLAlchemy 连接数据库的核心对象。
+- 它知道数据库地址、用户、密码、数据库名。
+- `echo=True` 表示把 SQLAlchemy 执行的 SQL 打印到终端，学习阶段很有用。
+
+注意：
+
+- 生产环境通常会关掉 `echo=True`。
+- Demo 阶段先开着，方便看到后端到底执行了什么 SQL。
+
+```python
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+```
+
+- `SessionLocal` 是一个“会话工厂”。
+- 每调用一次 `SessionLocal()`，就会创建一个新的数据库会话。
+
+参数解释：
+
+```python
+bind=engine
+```
+
+- 表示这个会话连接到哪个数据库 engine。
+
+```python
+autoflush=False
+```
+
+- 表示 SQLAlchemy 不要在某些查询前自动把修改同步到数据库。
+- 第一版先关掉，行为更容易理解。
+
+```python
+autocommit=False
+```
+
+- 表示不自动提交事务。
+- 后面新增、修改、删除数据时，需要我们明确调用：
+
+```python
+db.commit()
+```
+
+这样更安全，也更容易知道什么时候数据真正写入数据库。
+
+### 12.3 重点理解 get_db()
+
+```python
+def get_db() -> Generator[Session, None, None]:
+```
+
+- 定义一个函数，名字叫 `get_db`。
+- 它会返回一个数据库会话。
+- 因为函数内部用了 `yield`，所以返回类型写成 `Generator[...]`。
+
+```python
+db = SessionLocal()
+```
+
+- 创建一个新的数据库会话。
+- 后面接口里会通过这个 `db` 去查询、增加、修改、删除数据。
+
+```python
+try:
+    yield db
+```
+
+- `yield db` 表示把这个数据库会话交给 FastAPI 接口使用。
+- 接口执行期间，`db` 会保持可用。
+
+前端类比：
+
+- 有点像你把一个已经配置好的请求客户端传给某个函数。
+
+```python
+finally:
+    db.close()
+```
+
+- 不管接口执行成功还是报错，最后都会关闭数据库会话。
+- 这是为了释放数据库连接资源。
+
+为什么用 `try/finally`：
+
+- 如果接口正常结束，会执行 `finally`。
+- 如果接口中途报错，也会执行 `finally`。
+- 这样不会因为异常导致连接忘记关闭。
+
+### 12.4 以后接口里怎么用
+
+现在先不用写接口，但你要知道后面会这样用：
+
+```python
+from fastapi import Depends
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+
+
+@router.get("/settings")
+def list_settings(db: Session = Depends(get_db)):
+    ...
+```
+
+这里的重点是：
+
+```python
+db: Session = Depends(get_db)
+```
+
+意思是：
+
+- 这个接口需要一个数据库会话。
+- FastAPI 会自动调用 `get_db()`。
+- 然后把 `yield` 出来的 `db` 传给接口函数。
+- 接口结束后，FastAPI 会继续执行 `finally`，关闭 db。
+
+前端类比：
+
+- 有点像 React 组件通过 hook 拿到某个能力。
+- 只不过这里是 FastAPI 通过依赖注入，把数据库会话传给接口函数。
+
+### 12.5 检查语法
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m compileall app/db
+```
+
+如果没有报错，说明 `app/db` 里的 Python 文件语法正确。
+
+### 12.6 再检查数据库健康接口
+
+启动后端：
+
+```bash
+python -m uvicorn app.main:app --reload
+```
+
+浏览器打开：
+
+```txt
+http://127.0.0.1:8000/health/db
+```
+
+如果看到：
+
+```json
+{"database":"ok"}
+```
+
+说明修改 `session.py` 后，数据库连接仍然正常。
+
+你现在要做：
+
+1. 修改 `backend/app/db/session.py`。
+2. 执行 `python -m compileall app/db`。
+3. 启动后端 `python -m uvicorn app.main:app --reload`。
+4. 访问 `http://127.0.0.1:8000/health/db`。
+5. 把结果发给我。
+
+## 第 13 步：初始化应用配置默认数据
+
+这一步要往 `app_settings` 表里插入 6 条默认配置数据。
+
+原因：第 10 步只是创建了表结构，表现在还是空的。应用配置页需要展示 6 个配置卡片：
+
+```txt
+对话开场白
+下一步问题建议
+文字转语音
+语音转文字
+模型配置
+常问设置
+```
+
+如果不先初始化这些数据，后面就算写好了：
+
+```txt
+GET /api/settings
+```
+
+接口也只能查到空数组。
+
+所以这一步先写一个 seed 脚本，把系统默认配置写进数据库。
+
+### 先理解：什么是 seed
+
+`seed` 可以理解成“初始化种子数据”。
+
+数据库里有两类东西：
+
+```txt
+表结构
+初始数据
+```
+
+第 10 步的 `init_db.py` 做的是：
+
+```txt
+创建表结构
+```
+
+这一步的 `seed.py` 做的是：
+
+```txt
+插入项目运行需要的默认数据
+```
+
+前端类比：
+
+如果你在前端写 demo，可能会先写：
+
+```ts
+const defaultSettings = [
+  { code: "greeting", name: "对话开场白", enabled: true },
+  { code: "suggestions", name: "下一步问题建议", enabled: true },
+]
+```
+
+现在只是把这批默认数据从前端 mock 移到 PostgreSQL 数据库里。
+
+### 先理解：为什么要单独写 seed.py
+
+你可能会问：为什么不直接写在 `init_db.py` 里？
+
+可以写在一起，但这里先拆开更清楚：
+
+- `init_db.py`：只负责创建表。
+- `seed.py`：只负责插入默认数据。
+
+这样职责更单一。
+
+以后如果表已经存在，只想重新补默认配置，就可以单独运行：
+
+```bash
+python -m app.db.seed
+```
+
+不用重新关心建表逻辑。
+
+### 13.1 创建 seed 脚本
+
+创建文件：
+
+```txt
+backend/app/db/seed.py
+```
+
+写入：
+
+```python
+from sqlalchemy.orm import Session
+
+from app.db.session import SessionLocal
+from app.models.setting import AppSetting
+
+
+DEFAULT_SETTINGS = [
+    {
+        "code": "greeting",
+        "name": "对话开场白",
+        "description": "开启后，新对话将自动显示开场白引导语。",
+        "enabled": True,
+        "config": {
+            "text": "欢迎使用智能AI问数，您可以向我咨询经营数据、报表分析相关问题。",
+            "questions": [
+                "各产品线销售情况",
+                "北京的产品线收入情况",
+                "深圳的产品销售情况",
+            ],
+        },
+    },
+    {
+        "code": "suggestions",
+        "name": "下一步问题建议",
+        "description": "开启后，AI回复下方自动生成相关延伸问题提示。",
+        "enabled": True,
+        "config": {},
+    },
+    {
+        "code": "tts",
+        "name": "文字转语音",
+        "description": "开启后，AI回答支持语音播报功能。",
+        "enabled": False,
+        "config": {},
+    },
+    {
+        "code": "stt",
+        "name": "语音转文字",
+        "description": "开启后，支持通过语音输入问题。",
+        "enabled": False,
+        "config": {},
+    },
+    {
+        "code": "model_config",
+        "name": "模型配置",
+        "description": "配置智能问数使用的AI模型。",
+        "enabled": True,
+        "config": {
+            "model_name": "mock-analysis-v1",
+        },
+    },
+    {
+        "code": "hot_recommend",
+        "name": "常问设置",
+        "description": "根据经常提问频次，在快捷提问中展示常问问题。",
+        "enabled": True,
+        "config": {
+            "threshold": 3,
+        },
+    },
+]
+
+
+def seed_app_settings(db: Session) -> None:
+    for item in DEFAULT_SETTINGS:
+        exists = (
+            db.query(AppSetting)
+            .filter(AppSetting.code == item["code"])
+            .first()
+        )
+        if exists:
+            continue
+
+        db.add(AppSetting(**item))
+
+    db.commit()
+
+
+def seed_db() -> None:
+    db = SessionLocal()
+    try:
+        seed_app_settings(db)
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    seed_db()
+    print("Database seed data inserted.")
+```
+
+### 13.2 逐段解释
+
+```python
+from sqlalchemy.orm import Session
+```
+
+- 引入 SQLAlchemy 的数据库会话类型。
+- 后面的 `seed_app_settings(db: Session)` 会用到。
+
+```python
+from app.db.session import SessionLocal
+```
+
+- 引入第 9 步创建的数据库会话工厂。
+- 用它可以创建一个真实的数据库会话。
+
+```python
+from app.models.setting import AppSetting
+```
+
+- 引入应用配置表的 SQLAlchemy Model。
+- 后面插入数据时，会创建 `AppSetting(...)` 对象。
+
+### 13.3 DEFAULT_SETTINGS 是什么
+
+```python
+DEFAULT_SETTINGS = [...]
+```
+
+- 这是一个 Python 列表。
+- 列表里每一项是一个字典。
+- 每个字典对应 `app_settings` 表里的一条记录。
+
+前端类比：
+
+```ts
+const defaultSettings = [
+  {
+    code: "greeting",
+    name: "对话开场白",
+    enabled: true,
+  },
+]
+```
+
+字段对应关系：
+
+```python
+"code": "greeting"
+```
+
+- 配置编码。
+- 后面更新配置时会通过 `code` 找到对应配置。
+- 比如接口可能是：
+
+```txt
+PATCH /api/settings/greeting
+```
+
+```python
+"name": "对话开场白"
+```
+
+- 前端卡片上展示的配置名称。
+
+```python
+"description": "开启后，新对话将自动显示开场白引导语。"
+```
+
+- 前端卡片上展示的说明文字。
+
+```python
+"enabled": True
+```
+
+- 配置开关是否开启。
+- `True` 表示开启。
+- `False` 表示关闭。
+
+```python
+"config": {...}
+```
+
+- 额外配置。
+- 不同配置项内容不一样，所以用 JSONB 存。
+
+例如开场白配置：
+
+```python
+"config": {
+    "text": "欢迎使用智能AI问数...",
+    "questions": ["各产品线销售情况"]
+}
+```
+
+例如常问设置：
+
+```python
+"config": {
+    "threshold": 3
+}
+```
+
+### 13.4 重点理解 seed_app_settings
+
+```python
+def seed_app_settings(db: Session) -> None:
+```
+
+- 定义一个函数，用来初始化应用配置。
+- 参数 `db` 是数据库会话。
+- `-> None` 表示这个函数不返回数据。
+
+```python
+for item in DEFAULT_SETTINGS:
+```
+
+- 遍历 6 条默认配置。
+- 每次循环处理一条配置。
+
+```python
+exists = (
+    db.query(AppSetting)
+    .filter(AppSetting.code == item["code"])
+    .first()
+)
+```
+
+这段是在查数据库：
+
+```txt
+app_settings 表里是否已经有相同 code 的配置
+```
+
+比如当前 `item["code"]` 是：
+
+```txt
+greeting
+```
+
+那它就会检查数据库里有没有：
+
+```txt
+code = greeting
+```
+
+为什么要检查：
+
+- 这个 seed 脚本可能会被重复执行。
+- 如果不检查，每次执行都会重复插入。
+- 但 `code` 字段是唯一的，重复插入还会报错。
+
+```python
+if exists:
+    continue
+```
+
+- 如果这条配置已经存在，就跳过。
+- `continue` 表示进入下一轮循环。
+
+```python
+db.add(AppSetting(**item))
+```
+
+这句是插入新数据。
+
+拆开理解：
+
+```python
+AppSetting(**item)
+```
+
+如果 `item` 是：
+
+```python
+{
+    "code": "greeting",
+    "name": "对话开场白",
+    "description": "开启后...",
+    "enabled": True,
+    "config": {},
+}
+```
+
+那么：
+
+```python
+AppSetting(**item)
+```
+
+大概等价于：
+
+```python
+AppSetting(
+    code="greeting",
+    name="对话开场白",
+    description="开启后...",
+    enabled=True,
+    config={},
+)
+```
+
+`**item` 是 Python 的字典展开语法。
+
+```python
+db.add(...)
+```
+
+- 把这条新数据加入当前数据库会话。
+- 注意：这时还没有真正写入数据库。
+
+```python
+db.commit()
+```
+
+- 提交事务。
+- 到这一步，数据才真正写入 PostgreSQL。
+
+前端类比：
+
+- `db.add(...)` 有点像先把修改放进待提交队列。
+- `db.commit()` 才像真正点击保存。
+
+### 13.5 重点理解 seed_db
+
+```python
+def seed_db() -> None:
+    db = SessionLocal()
+    try:
+        seed_app_settings(db)
+    finally:
+        db.close()
+```
+
+这段和第 12 步的 `get_db()` 思路很像：
+
+1. 创建数据库会话。
+2. 调用初始化函数。
+3. 最后关闭数据库会话。
+
+为什么这里不用 `get_db()`：
+
+- `get_db()` 是给 FastAPI 接口依赖用的。
+- `seed.py` 是命令行脚本，直接用 `SessionLocal()` 更直观。
+
+```python
+if __name__ == "__main__":
+    seed_db()
+    print("Database seed data inserted.")
+```
+
+- 表示直接运行这个文件时，执行 `seed_db()`。
+- 运行成功后打印提示。
+
+### 13.6 执行 seed 脚本
+
+在后端目录执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m app.db.seed
+```
+
+如果成功，会看到：
+
+```txt
+Database seed data inserted.
+```
+
+### 13.7 检查数据库数据
+
+回到项目根目录，进入 PostgreSQL：
+
+```bash
+cd ~/Desktop/full-stack-demo
+docker compose exec postgres psql -U archer -d fullstack_demo
+```
+
+执行 SQL：
+
+```sql
+SELECT code, name, enabled, config FROM app_settings ORDER BY id;
+```
+
+应该能看到 6 条配置：
+
+```txt
+greeting
+suggestions
+tts
+stt
+model_config
+hot_recommend
+```
+
+退出：
+
+```sql
+\q
+```
+
+### 13.8 检查语法
+
+也可以执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+python -m compileall app/db
+```
+
+如果没有报错，说明 `seed.py` 语法没问题。
+
+你现在要做：
+
+1. 创建 `backend/app/db/seed.py`。
+2. 执行 `python -m compileall app/db`。
+3. 执行 `python -m app.db.seed`。
+4. 进入 PostgreSQL 查询 `app_settings`。
+5. 把查询结果发给我。
+
+## 第 14 步：创建应用配置接口
+
+这一步开始写真正的业务接口。
+
+先做应用配置接口，原因是它最简单：
+
+- 数据表已经有了：`app_settings`
+- 默认数据已经有了：6 条配置
+- Schema 已经有了：`AppSettingRead`、`AppSettingUpdate`
+- 接口只需要查询和更新，不涉及复杂业务逻辑
+
+这一轮要完成两个接口：
+
+```txt
+GET   /api/settings
+PATCH /api/settings/{code}
+```
+
+作用：
+
+- `GET /api/settings`：返回所有应用配置，用于应用配置页展示 6 个卡片。
+- `PATCH /api/settings/{code}`：根据配置编码更新某一个配置，比如开关、开场白、模型名称、常问阈值。
+
+前端类比：
+
+```ts
+await fetch("/api/settings")
+```
+
+拿到配置列表。
+
+```ts
+await fetch("/api/settings/greeting", {
+  method: "PATCH",
+  body: JSON.stringify({ enabled: false }),
+})
+```
+
+更新某个配置。
+
+### 14.1 创建应用配置路由文件
+
+创建文件：
+
+```txt
+backend/app/routers/settings.py
+```
+
+写入：
+
+```python
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.models.setting import AppSetting
+from app.schemas.setting import AppSettingRead, AppSettingUpdate
+
+router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+@router.get("", response_model=list[AppSettingRead])
+def list_settings(db: Session = Depends(get_db)):
+    return db.query(AppSetting).order_by(AppSetting.id).all()
+
+
+@router.patch("/{code}", response_model=AppSettingRead)
+def update_setting(
+    code: str,
+    payload: AppSettingUpdate,
+    db: Session = Depends(get_db),
+):
+    setting = db.query(AppSetting).filter(AppSetting.code == code).first()
+    if setting is None:
+        raise HTTPException(status_code=404, detail="Setting not found")
+
+    if payload.enabled is not None:
+        setting.enabled = payload.enabled
+
+    if payload.config is not None:
+        setting.config = payload.config
+
+    db.commit()
+    db.refresh(setting)
+
+    return setting
+```
+
+### 14.2 逐段解释
+
+```python
+from fastapi import APIRouter, Depends, HTTPException
+```
+
+- `APIRouter`：用来创建一组接口路由。
+- `Depends`：用来声明依赖，比如自动获取数据库会话。
+- `HTTPException`：用来主动返回 HTTP 错误，比如配置不存在时返回 404。
+
+前端类比：
+
+- `APIRouter` 有点像前端路由里的一个模块。
+- 比如你会把“设置页相关逻辑”放在一个文件里。
+
+```python
+from sqlalchemy.orm import Session
+```
+
+- 引入数据库会话类型。
+- 用来给 `db` 参数做类型标注。
+
+```python
+from app.db.session import get_db
+```
+
+- 引入第 12 步写的数据库会话依赖。
+- 后面的接口会用它拿到数据库连接。
+
+```python
+from app.models.setting import AppSetting
+```
+
+- 引入 SQLAlchemy Model。
+- 通过它查询和更新 `app_settings` 表。
+
+```python
+from app.schemas.setting import AppSettingRead, AppSettingUpdate
+```
+
+- 引入 Pydantic Schema。
+- `AppSettingRead` 用于接口返回。
+- `AppSettingUpdate` 用于接口接收更新数据。
+
+### 14.3 理解 APIRouter
+
+```python
+router = APIRouter(prefix="/api/settings", tags=["settings"])
+```
+
+这句创建了一个路由对象。
+
+```python
+prefix="/api/settings"
+```
+
+- 表示这个文件里的接口都以 `/api/settings` 开头。
+
+比如：
+
+```python
+@router.get("")
+```
+
+最终接口地址就是：
+
+```txt
+GET /api/settings
+```
+
+再比如：
+
+```python
+@router.patch("/{code}")
+```
+
+最终接口地址就是：
+
+```txt
+PATCH /api/settings/{code}
+```
+
+```python
+tags=["settings"]
+```
+
+- 表示在 Swagger 文档里，这组接口归类到 `settings` 分组。
+- 打开 `/docs` 时会更清楚。
+
+### 14.4 理解 GET /api/settings
+
+```python
+@router.get("", response_model=list[AppSettingRead])
+```
+
+- 声明一个 GET 接口。
+- `""` 表示路径就是 prefix 本身。
+- `response_model=list[AppSettingRead]` 表示接口返回的是一个列表，列表里每一项都是 `AppSettingRead`。
+
+前端类比：
+
+```ts
+type Response = AppSetting[]
+```
+
+```python
+def list_settings(db: Session = Depends(get_db)):
+```
+
+- 定义接口处理函数。
+- `db` 是数据库会话。
+- `Depends(get_db)` 表示让 FastAPI 自动调用 `get_db()` 获取数据库会话。
+
+```python
+return db.query(AppSetting).order_by(AppSetting.id).all()
+```
+
+这句是在查询数据库：
+
+```txt
+查询 app_settings 表，按 id 排序，返回全部记录
+```
+
+拆开：
+
+```python
+db.query(AppSetting)
+```
+
+- 查询 `AppSetting` 对应的数据库表，也就是 `app_settings`。
+
+```python
+.order_by(AppSetting.id)
+```
+
+- 按 id 排序。
+- 这样返回顺序稳定。
+
+```python
+.all()
+```
+
+- 返回所有符合条件的数据。
+- 结果是一个列表。
+
+### 14.5 理解 PATCH /api/settings/{code}
+
+```python
+@router.patch("/{code}", response_model=AppSettingRead)
+```
+
+- 声明一个 PATCH 接口。
+- `{code}` 是路径参数。
+
+如果请求：
+
+```txt
+PATCH /api/settings/greeting
+```
+
+那函数里的：
+
+```python
+code: str
+```
+
+值就是：
+
+```txt
+greeting
+```
+
+为什么用 PATCH：
+
+- `PATCH` 表示局部更新。
+- 这里可以只更新 `enabled`，也可以只更新 `config`。
+
+```python
+payload: AppSettingUpdate
+```
+
+- 请求 body 会被 Pydantic 转成 `AppSettingUpdate`。
+- 比如前端传：
+
+```json
+{
+  "enabled": false
+}
+```
+
+那后端里：
+
+```python
+payload.enabled
+```
+
+就是：
+
+```python
+False
+```
+
+```python
+setting = db.query(AppSetting).filter(AppSetting.code == code).first()
+```
+
+这句是在按 `code` 查配置。
+
+```python
+.filter(AppSetting.code == code)
+```
+
+- 只查 `code` 等于路径参数的记录。
+
+```python
+.first()
+```
+
+- 返回第一条记录。
+- 如果没找到，返回 `None`。
+
+```python
+if setting is None:
+    raise HTTPException(status_code=404, detail="Setting not found")
+```
+
+- 如果没有找到对应配置，就返回 404。
+
+前端会收到类似：
+
+```json
+{
+  "detail": "Setting not found"
+}
+```
+
+```python
+if payload.enabled is not None:
+    setting.enabled = payload.enabled
+```
+
+- 如果前端传了 `enabled`，就更新开关。
+- 这里必须判断 `is not None`，不能简单写 `if payload.enabled`。
+
+原因：
+
+```python
+False
+```
+
+本身也是一个合法值，表示关闭开关。
+
+如果写：
+
+```python
+if payload.enabled:
+```
+
+当前端传 `false` 时，这个判断不会进入，导致无法关闭配置。
+
+所以正确写法是：
+
+```python
+if payload.enabled is not None:
+```
+
+```python
+if payload.config is not None:
+    setting.config = payload.config
+```
+
+- 如果前端传了 `config`，就更新配置内容。
+- 比如更新开场白文案、模型名称、常问阈值。
+
+```python
+db.commit()
+```
+
+- 提交事务。
+- 数据真正写入 PostgreSQL。
+
+```python
+db.refresh(setting)
+```
+
+- 从数据库重新刷新这个对象。
+- 这样能拿到数据库更新后的最新字段，比如 `updated_at`。
+
+```python
+return setting
+```
+
+- 返回更新后的配置。
+- FastAPI 会根据 `response_model=AppSettingRead` 把它转换成 JSON。
+
+### 14.6 在 main.py 挂载路由
+
+只创建 `settings.py` 还不够。
+
+还需要告诉 FastAPI：
+
+```txt
+请把 settings 这组接口加入到 app 里
+```
+
+修改文件：
+
+```txt
+backend/app/main.py
+```
+
+改成：
+
+```python
+from fastapi import FastAPI
+
+from app.db.session import check_database_connection
+from app.routers import settings
+
+app = FastAPI(title="Full Stack Demo API")
+
+app.include_router(settings.router)
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/health/db")
+def database_health_check():
+    check_database_connection()
+    return {"database": "ok"}
+```
+
+解释：
+
+```python
+from app.routers import settings
+```
+
+- 导入刚创建的 settings 路由模块。
+
+```python
+app.include_router(settings.router)
+```
+
+- 把 `settings.router` 注册到 FastAPI 应用里。
+- 注册后，`GET /api/settings` 和 `PATCH /api/settings/{code}` 才会真正生效。
+
+注意：
+
+- 如果忘了 `include_router`，代码没有语法错误，但浏览器访问接口会是 404。
+- 因为 FastAPI 根本不知道你写了这个 router。
+
+### 14.7 检查语法
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m compileall app
+```
+
+如果没有报错，说明后端 Python 文件语法正确。
+
+### 14.8 启动后端
+
+执行：
+
+```bash
+python -m uvicorn app.main:app --reload
+```
+
+如果之前已经启动着后端，保存代码后它会自动 reload。
+
+### 14.9 测试 GET 接口
+
+浏览器打开：
+
+```txt
+http://127.0.0.1:8000/api/settings
+```
+
+应该看到一个 JSON 数组，里面有 6 条配置。
+
+也可以打开 Swagger：
+
+```txt
+http://127.0.0.1:8000/docs
+```
+
+找到：
+
+```txt
+settings
+GET /api/settings
+```
+
+点 `Try it out`，再点 `Execute`。
+
+### 14.10 测试 PATCH 接口
+
+打开 Swagger：
+
+```txt
+http://127.0.0.1:8000/docs
+```
+
+找到：
+
+```txt
+PATCH /api/settings/{code}
+```
+
+点击 `Try it out`。
+
+`code` 填：
+
+```txt
+tts
+```
+
+Request body 填：
+
+```json
+{
+  "enabled": true
+}
+```
+
+点击 `Execute`。
+
+如果成功，返回结果里应该能看到：
+
+```json
+"code": "tts",
+"enabled": true
+```
+
+然后再打开：
+
+```txt
+http://127.0.0.1:8000/api/settings
+```
+
+确认 `tts` 的 `enabled` 已经变成 `true`。
+
+### 14.11 常见错误
+
+#### 404 Not Found
+
+可能原因：
+
+- 忘了在 `main.py` 里写 `app.include_router(settings.router)`。
+- 路径写错了，比如访问成 `/settings`，但真实路径是 `/api/settings`。
+
+#### ImportError
+
+可能原因：
+
+- `from app.routers import settings` 写错。
+- 文件名不是 `settings.py`。
+- 当前运行命令不是在 `backend` 目录执行。
+
+#### 422 Unprocessable Entity
+
+通常是请求 body 格式不符合 Schema。
+
+比如 PATCH 时传了：
+
+```json
+{
+  "enabled": "yes"
+}
+```
+
+但后端期望：
+
+```json
+{
+  "enabled": true
+}
+```
+
+#### 500 Internal Server Error
+
+可能原因：
+
+- 数据库没启动。
+- `.env` 数据库连接配置不对。
+- 表还没创建。
+
+你现在要做：
+
+1. 创建 `backend/app/routers/settings.py`。
+2. 修改 `backend/app/main.py`，挂载 settings router。
+3. 执行 `python -m compileall app`。
+4. 启动或等待后端 reload。
+5. 访问 `http://127.0.0.1:8000/api/settings`。
+6. 在 Swagger 里测试 `PATCH /api/settings/{code}`。
+7. 把 GET 和 PATCH 的结果发给我。
+
+## 第 15 步：创建回复校对接口
+
+这一步要实现“回复校对”页面需要的后端接口。
+
+第 14 步做的是应用配置接口，只有查询和更新一个配置项。第 15 步稍微复杂一点，会包含：
+
+- 新增反馈
+- 查询反馈列表
+- 按问题搜索
+- 按用户搜索
+- 按状态筛选
+- 分页
+- 查看单条反馈详情
+- 处理反馈并保存备注
+
+这一轮要完成这些接口：
+
+```txt
+POST  /api/feedbacks
+GET   /api/feedbacks
+GET   /api/feedbacks/{feedback_id}
+PATCH /api/feedbacks/{feedback_id}
+```
+
+说明：
+
+- 原计划里回复校对主要是 `GET /api/feedbacks`、`GET /api/feedbacks/{feedback_id}`、`PATCH /api/feedbacks/{feedback_id}`。
+- 这里额外加一个 `POST /api/feedbacks`，是为了方便现在手动创建测试数据。
+- 后面智能问数页面里的“数据有误/反馈”按钮，也可以复用这个创建接口。
+
+### 15.1 先调整反馈 Schema
+
+修改文件：
+
+```txt
+backend/app/schemas/feedback.py
+```
+
+建议改成：
+
+```python
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+class FeedbackBase(BaseModel):
+    user_name: str
+    question: str
+    ai_answer: str
+    message_id: int | None = None
+
+
+class FeedbackCreate(FeedbackBase):
+    pass
+
+
+class FeedbackRead(FeedbackBase):
+    id: int
+    status: str
+    remark: str | None = None
+    created_at: datetime
+    handled_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class FeedbackUpdate(BaseModel):
+    status: str | None = None
+    remark: str | None = None
+
+
+class FeedbackListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[FeedbackRead] = Field(default_factory=list)
+```
+
+如果你当前写的是：
+
+```python
+class FeedbackBasic(BaseModel):
+```
+
+也能运行，但这里建议改成：
+
+```python
+class FeedbackBase(BaseModel):
+```
+
+原因：
+
+- `Base` 是这类公共字段的常见命名。
+- 和前面 `ChatMessageBase` 风格统一。
+
+### 15.2 解释 FeedbackListResponse
+
+为什么要新增：
+
+```python
+class FeedbackListResponse(BaseModel):
+```
+
+因为回复校对页面有分页。
+
+如果接口只返回：
+
+```json
+[
+  { "id": 1, "question": "..." },
+  { "id": 2, "question": "..." }
+]
+```
+
+前端只能拿到当前页数据，但不知道：
+
+- 总共有多少条
+- 当前是第几页
+- 每页多少条
+
+所以更适合返回：
+
+```json
+{
+  "total": 23,
+  "page": 1,
+  "page_size": 10,
+  "items": [
+    { "id": 1, "question": "..." },
+    { "id": 2, "question": "..." }
+  ]
+}
+```
+
+字段解释：
+
+```python
+total: int
+```
+
+- 符合查询条件的总条数。
+- 前端分页器需要用它计算总页数。
+
+```python
+page: int
+```
+
+- 当前页码。
+
+```python
+page_size: int
+```
+
+- 每页条数。
+
+```python
+items: list[FeedbackRead] = Field(default_factory=list)
+```
+
+- 当前页的反馈数据列表。
+- `Field(default_factory=list)` 表示默认是一个新的空列表。
+- 不直接写 `items = []`，避免可变默认值问题。
+
+### 15.3 创建回复校对路由文件
+
+创建文件：
+
+```txt
+backend/app/routers/feedbacks.py
+```
+
+写入：
+
+```python
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.models.feedback import Feedback
+from app.schemas.feedback import (
+    FeedbackCreate,
+    FeedbackListResponse,
+    FeedbackRead,
+    FeedbackUpdate,
+)
+
+router = APIRouter(prefix="/api/feedbacks", tags=["feedbacks"])
+
+
+@router.post("", response_model=FeedbackRead)
+def create_feedback(
+    payload: FeedbackCreate,
+    db: Session = Depends(get_db),
+):
+    feedback = Feedback(**payload.model_dump())
+    db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+    return feedback
+
+
+@router.get("", response_model=FeedbackListResponse)
+def list_feedbacks(
+    question: str | None = None,
+    user: str | None = None,
+    status: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Feedback)
+
+    if question:
+        query = query.filter(Feedback.question.ilike(f"%{question}%"))
+
+    if user:
+        query = query.filter(Feedback.user_name.ilike(f"%{user}%"))
+
+    if status:
+        query = query.filter(Feedback.status == status)
+
+    total = query.count()
+    items = (
+        query.order_by(Feedback.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
+
+
+@router.get("/{feedback_id}", response_model=FeedbackRead)
+def get_feedback(
+    feedback_id: int,
+    db: Session = Depends(get_db),
+):
+    feedback = db.query(Feedback).filter(Feedback.id == feedback_id).first()
+    if feedback is None:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+
+    return feedback
+
+
+@router.patch("/{feedback_id}", response_model=FeedbackRead)
+def update_feedback(
+    feedback_id: int,
+    payload: FeedbackUpdate,
+    db: Session = Depends(get_db),
+):
+    feedback = db.query(Feedback).filter(Feedback.id == feedback_id).first()
+    if feedback is None:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+
+    if payload.status is not None:
+        feedback.status = payload.status
+        if payload.status == "resolved":
+            feedback.handled_at = datetime.now(timezone.utc)
+        elif payload.status == "pending":
+            feedback.handled_at = None
+
+    if payload.remark is not None:
+        feedback.remark = payload.remark
+
+    db.commit()
+    db.refresh(feedback)
+
+    return feedback
+```
+
+### 15.4 逐段解释 imports
+
+```python
+from datetime import datetime, timezone
+```
+
+- 用来生成处理时间 `handled_at`。
+- `timezone.utc` 表示使用 UTC 时间。
+
+```python
+from fastapi import APIRouter, Depends, HTTPException, Query
+```
+
+- `APIRouter`：创建接口路由。
+- `Depends`：注入数据库会话。
+- `HTTPException`：返回 404 等错误。
+- `Query`：给查询参数加规则，比如页码不能小于 1。
+
+```python
+from sqlalchemy.orm import Session
+```
+
+- 数据库会话类型。
+
+```python
+from app.db.session import get_db
+```
+
+- 第 12 步写的数据库会话依赖。
+
+```python
+from app.models.feedback import Feedback
+```
+
+- SQLAlchemy Model，用来操作 `feedbacks` 表。
+
+```python
+from app.schemas.feedback import (...)
+```
+
+- Pydantic Schema，用来声明接口请求和响应的数据结构。
+
+### 15.5 理解 POST /api/feedbacks
+
+```python
+@router.post("", response_model=FeedbackRead)
+```
+
+- 声明创建反馈接口。
+- 路径是 `/api/feedbacks`。
+- 返回值格式是 `FeedbackRead`。
+
+```python
+payload: FeedbackCreate
+```
+
+- 请求 body 会被 Pydantic 校验并转成 `FeedbackCreate` 对象。
+
+前端请求大概是：
+
+```json
+{
+  "user_name": "管理员",
+  "question": "北京代表处今年达成情况",
+  "ai_answer": "北京代表处整体同比下降3%",
+  "message_id": null
+}
+```
+
+```python
+feedback = Feedback(**payload.model_dump())
+```
+
+拆开理解：
+
+```python
+payload.model_dump()
+```
+
+- 把 Pydantic 对象转成普通 Python 字典。
+
+例如：
+
+```python
+{
+    "user_name": "管理员",
+    "question": "北京代表处今年达成情况",
+    "ai_answer": "北京代表处整体同比下降3%",
+    "message_id": None,
+}
+```
+
+```python
+Feedback(**payload.model_dump())
+```
+
+- 用字典展开语法创建 SQLAlchemy 对象。
+
+大概等价于：
+
+```python
+Feedback(
+    user_name="管理员",
+    question="北京代表处今年达成情况",
+    ai_answer="北京代表处整体同比下降3%",
+    message_id=None,
+)
+```
+
+```python
+db.add(feedback)
+db.commit()
+db.refresh(feedback)
+```
+
+- `db.add`：加入当前会话。
+- `db.commit`：提交到数据库。
+- `db.refresh`：从数据库刷新，拿到 `id`、`created_at` 等数据库生成的字段。
+
+### 15.6 理解 GET /api/feedbacks
+
+```python
+@router.get("", response_model=FeedbackListResponse)
+```
+
+- 声明反馈列表接口。
+- 返回值不是普通列表，而是带分页信息的对象。
+
+```python
+question: str | None = None
+user: str | None = None
+status: str | None = None
+```
+
+这些是查询参数。
+
+例如请求：
+
+```txt
+GET /api/feedbacks?question=北京&user=管理员&status=pending
+```
+
+对应函数参数：
+
+```python
+question = "北京"
+user = "管理员"
+status = "pending"
+```
+
+```python
+page: int = Query(1, ge=1)
+```
+
+- `page` 默认是 1。
+- `ge=1` 表示 greater than or equal，大于等于 1。
+- 如果前端传 `page=0`，FastAPI 会自动返回 422。
+
+```python
+page_size: int = Query(10, ge=1, le=100)
+```
+
+- `page_size` 默认是 10。
+- 最小 1，最大 100。
+- 防止一次请求拿太多数据。
+
+```python
+query = db.query(Feedback)
+```
+
+- 先创建一个基础查询。
+- 后面根据条件一点点往上加筛选。
+
+```python
+if question:
+    query = query.filter(Feedback.question.ilike(f"%{question}%"))
+```
+
+- 如果传了 `question`，就按问题模糊搜索。
+- `ilike` 是 PostgreSQL 里的不区分大小写模糊匹配。
+- `%北京%` 表示包含“北京”的内容都能匹配。
+
+```python
+if user:
+    query = query.filter(Feedback.user_name.ilike(f"%{user}%"))
+```
+
+- 如果传了 `user`，就按用户名模糊搜索。
+
+```python
+if status:
+    query = query.filter(Feedback.status == status)
+```
+
+- 如果传了状态，就精确匹配状态。
+- 比如 `pending` 或 `resolved`。
+
+```python
+total = query.count()
+```
+
+- 统计符合筛选条件的总条数。
+- 注意：这是分页前的总数。
+
+```python
+.order_by(Feedback.created_at.desc())
+```
+
+- 按创建时间倒序。
+- 最新反馈排在前面。
+
+```python
+.offset((page - 1) * page_size)
+```
+
+- 跳过前面的数据。
+
+分页例子：
+
+```txt
+page = 1, page_size = 10, offset = 0
+page = 2, page_size = 10, offset = 10
+page = 3, page_size = 10, offset = 20
+```
+
+```python
+.limit(page_size)
+```
+
+- 限制最多返回多少条。
+
+```python
+.all()
+```
+
+- 执行查询并返回列表。
+
+### 15.7 理解 GET /api/feedbacks/{feedback_id}
+
+```python
+@router.get("/{feedback_id}", response_model=FeedbackRead)
+```
+
+- 根据 id 查询单条反馈。
+- 处理弹窗打开时，可以用这个接口拿详情。
+
+```python
+feedback_id: int
+```
+
+- 路径参数。
+
+例如请求：
+
+```txt
+GET /api/feedbacks/1
+```
+
+那：
+
+```python
+feedback_id = 1
+```
+
+```python
+feedback = db.query(Feedback).filter(Feedback.id == feedback_id).first()
+```
+
+- 根据主键 id 查一条反馈。
+
+```python
+if feedback is None:
+    raise HTTPException(status_code=404, detail="Feedback not found")
+```
+
+- 如果找不到，返回 404。
+
+### 15.8 理解 PATCH /api/feedbacks/{feedback_id}
+
+```python
+@router.patch("/{feedback_id}", response_model=FeedbackRead)
+```
+
+- 根据 id 更新反馈。
+- 用于“处理反馈”弹窗保存状态和备注。
+
+```python
+payload: FeedbackUpdate
+```
+
+- 请求 body。
+- 可以传 `status`，也可以传 `remark`。
+
+例如：
+
+```json
+{
+  "status": "resolved",
+  "remark": "已核对，数据口径已修正"
+}
+```
+
+```python
+if payload.status is not None:
+    feedback.status = payload.status
+```
+
+- 如果传了状态，就更新状态。
+
+```python
+if payload.status == "resolved":
+    feedback.handled_at = datetime.now(timezone.utc)
+```
+
+- 如果状态改为已处理，就记录处理时间。
+
+```python
+elif payload.status == "pending":
+    feedback.handled_at = None
+```
+
+- 如果状态改回待处理，就清空处理时间。
+
+```python
+if payload.remark is not None:
+    feedback.remark = payload.remark
+```
+
+- 如果传了备注，就更新备注。
+
+```python
+db.commit()
+db.refresh(feedback)
+return feedback
+```
+
+- 提交更新。
+- 刷新数据库对象。
+- 返回更新后的反馈。
+
+### 15.9 在 main.py 挂载反馈路由
+
+修改文件：
+
+```txt
+backend/app/main.py
+```
+
+把导入改成：
+
+```python
+from app.routers import feedbacks, settings
+```
+
+再增加：
+
+```python
+app.include_router(feedbacks.router)
+```
+
+完整结构类似：
+
+```python
+from fastapi import FastAPI
+
+from app.db.session import check_database_connection
+from app.routers import feedbacks, settings
+
+app = FastAPI(title="Full Stack Demo API")
+
+app.include_router(settings.router)
+app.include_router(feedbacks.router)
+```
+
+注意：
+
+- 如果忘了 `app.include_router(feedbacks.router)`，访问 `/api/feedbacks` 会 404。
+
+### 15.10 检查语法
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m compileall app
+```
+
+如果没有报错，说明语法正确。
+
+### 15.11 测试创建反馈
+
+打开 Swagger：
+
+```txt
+http://127.0.0.1:8000/docs
+```
+
+找到：
+
+```txt
+POST /api/feedbacks
+```
+
+Request body 填：
+
+```json
+{
+  "user_name": "管理员",
+  "question": "北京代表处今年达成情况",
+  "ai_answer": "北京代表处整体同比下降3%",
+  "message_id": null
+}
+```
+
+点击 `Execute`。
+
+如果成功，返回状态码是 200，响应里会有：
+
+```json
+"id": 1,
+"status": "pending"
+```
+
+### 15.12 测试反馈列表
+
+访问：
+
+```txt
+http://127.0.0.1:8000/api/feedbacks
+```
+
+应该看到：
+
+```json
+{
+  "total": 1,
+  "page": 1,
+  "page_size": 10,
+  "items": [
+    {
+      "id": 1,
+      "user_name": "管理员",
+      "question": "北京代表处今年达成情况",
+      "status": "pending"
+    }
+  ]
+}
+```
+
+测试搜索：
+
+```txt
+http://127.0.0.1:8000/api/feedbacks?question=北京
+```
+
+测试用户：
+
+```txt
+http://127.0.0.1:8000/api/feedbacks?user=管理员
+```
+
+测试状态：
+
+```txt
+http://127.0.0.1:8000/api/feedbacks?status=pending
+```
+
+测试分页：
+
+```txt
+http://127.0.0.1:8000/api/feedbacks?page=1&page_size=5
+```
+
+### 15.13 测试反馈详情
+
+访问：
+
+```txt
+http://127.0.0.1:8000/api/feedbacks/1
+```
+
+应该返回 id 为 1 的反馈详情。
+
+### 15.14 测试处理反馈
+
+Swagger 中找到：
+
+```txt
+PATCH /api/feedbacks/{feedback_id}
+```
+
+`feedback_id` 填：
+
+```txt
+1
+```
+
+Request body 填：
+
+```json
+{
+  "status": "resolved",
+  "remark": "已核对，数据口径已修正"
+}
+```
+
+点击 `Execute`。
+
+如果成功，返回里应该看到：
+
+```json
+"status": "resolved",
+"remark": "已核对，数据口径已修正",
+"handled_at": "..."
+```
+
+### 15.15 常见错误
+
+#### 404 Not Found
+
+可能原因：
+
+- 没有在 `main.py` 里挂载 `feedbacks.router`。
+- 访问的反馈 id 不存在。
+
+#### 422 Unprocessable Entity
+
+可能原因：
+
+- `page=0`，但页码要求大于等于 1。
+- 请求 body 字段类型不对。
+- POST 时少传了 `user_name`、`question` 或 `ai_answer`。
+
+#### 500 Internal Server Error
+
+可能原因：
+
+- 数据库没启动。
+- `feedbacks` 表没创建。
+- `message_id` 传了一个不存在的 `chat_messages.id`，触发外键问题。
+
+你现在要做：
+
+1. 修改 `backend/app/schemas/feedback.py`，增加 `FeedbackListResponse`。
+2. 创建 `backend/app/routers/feedbacks.py`。
+3. 修改 `backend/app/main.py`，挂载 feedbacks router。
+4. 执行 `python -m compileall app`。
+5. 用 Swagger 测试 `POST /api/feedbacks`。
+6. 测试 `GET /api/feedbacks`。
+7. 测试 `GET /api/feedbacks/{feedback_id}`。
+8. 测试 `PATCH /api/feedbacks/{feedback_id}`。
+9. 把结果发给我。
