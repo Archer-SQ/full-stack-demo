@@ -2,7 +2,7 @@
 
 这是唯一的交接文档。另一台电脑上的 Codex 先读这个文件，用来接上当前进度。
 
-更新时间：2026-06-29
+更新时间：2026-06-30
 
 ## 项目背景
 
@@ -16,21 +16,47 @@
 - 数据库使用 PostgreSQL。
 - 本地通过 Docker Compose 启动数据库。
 
-用户希望按 `plan.md` 一步一步做。每一步都要解释清楚：
-
-- 这一步做什么。
-- 为什么要做。
-- 命令是什么意思。
-- Python / FastAPI / PostgreSQL 概念尽量用前端知识类比。
-
-重要协作方式：
+用户希望按 `plan.md` 一步一步做。协作方式很重要：
 
 - 不要一次性把后续所有代码都做完。
 - 一次只推进一小步，用户做完发结果，再继续下一步。
-- 难懂的 Python 语法要逐行解释，例如 `sum`、`round`、`max(..., key=...)`、`lambda`、`Depends`、`Session`、`db.query()` 等。
+- 后端概念要讲细，尽量用前端知识类比。
+- 难懂的 Python / FastAPI / SQLAlchemy 语法要逐行解释。
 - 文档必须同步更新到 `plan.md`，不要只在聊天里解释。
+- 提交代码前必须更新本文件。
 
-## 当前进度
+## 当前最准确的进度
+
+当前已经完成到：
+
+```txt
+第 17 步：前端接入后端前的 API 基础层
+```
+
+并且已经通过：
+
+```txt
+后端 python -m compileall app
+前端 pnpm build
+```
+
+下一步从 `plan.md` 的这里继续：
+
+```txt
+第 18 步：用前端页面调用 /api/settings，确认前后端连通
+```
+
+不要直接开始做最终页面。
+
+第 18 步只是一个临时联调页，用来验证：
+
+```txt
+React -> Vite proxy -> FastAPI -> PostgreSQL
+```
+
+这条链路是否完整打通。
+
+## 已完成内容
 
 已经完成：
 
@@ -49,14 +75,12 @@
 13. 创建并验证应用配置接口。
 14. 创建并验证回复校对接口。
 15. 创建模拟 AI 服务 `backend/app/services/mock_ai.py`。
-16. 创建会话接口文件 `backend/app/routers/chat.py`，但还没有挂载到 `main.py`。
-
-当前最准确的阶段：
-
-```txt
-第 16.2 步已写完 chat.py，并已做语法级检查。
-下一步是第 16.3：在 main.py 挂载 chat.router，然后用 Swagger 测试会话接口。
-```
+16. 创建会话接口 `backend/app/routers/chat.py`。
+17. 在 `backend/app/main.py` 挂载 `chat.router`。
+18. 用 Swagger 验证会话接口。
+19. 配置前端 Vite `/api` 代理。
+20. 创建前端 API 请求基础层。
+21. 前端构建通过。
 
 ## 已完成接口
 
@@ -83,49 +107,7 @@ GET   /api/feedbacks/{feedback_id}
 PATCH /api/feedbacks/{feedback_id}
 ```
 
-回复校对接口已用 Swagger 验证通过：
-
-- 创建反馈。
-- 按问题关键字筛选。
-- 按用户筛选。
-- 按状态筛选。
-- 分页查询。
-- 查询详情。
-- 处理反馈，把状态改成 `resolved` 并写入备注。
-
-## 当前已写但尚未联调的代码
-
-### 模拟 AI 服务
-
-文件：
-
-```txt
-backend/app/services/mock_ai.py
-```
-
-作用：
-
-- 返回第一张原型图里的经营单元收入与目标分析数据。
-- 包含表格、统计项、柱状图配置、快捷追问。
-- 现在是 mock 数据，后续真实接 AI 时可以替换 `generate_mock_answer()` 内部逻辑。
-
-已执行：
-
-```bash
-python -m compileall app
-```
-
-结果：通过。
-
-### 会话接口文件
-
-文件：
-
-```txt
-backend/app/routers/chat.py
-```
-
-已经写了这些接口定义：
+会话接口：
 
 ```txt
 POST /api/sessions
@@ -134,11 +116,55 @@ GET  /api/sessions/{session_id}
 POST /api/sessions/{session_id}/messages
 ```
 
+会话接口已用 Swagger 验证通过：
+
+- 创建会话。
+- 查询会话列表。
+- 查询单个会话。
+- 发送用户消息。
+- 后端自动保存用户消息和 assistant 模拟回复。
+- assistant 回复里包含 `answer_data`。
+
+## 当前前端 API 基础层
+
+已新增：
+
+```txt
+frontend/src/api/http.ts
+frontend/src/api/types.ts
+frontend/src/api/settings.ts
+frontend/src/api/chat.ts
+```
+
+`frontend/vite.config.ts` 已配置：
+
+```ts
+server: {
+  proxy: {
+    "/api": {
+      target: "http://127.0.0.1:8000",
+      changeOrigin: true,
+    },
+  },
+}
+```
+
 注意：
 
-- `chat.py` 目前还没有在 `backend/app/main.py` 里挂载。
-- 所以 Swagger 里暂时还看不到 `/api/sessions`。
-- 下一步才改 `main.py` 并测试。
+- 前端页面里应该请求 `/api/...`，不要写死 `http://127.0.0.1:8000/api/...`。
+- `/api/settings` 返回的是数组，所以前端函数是 `getSettings()`，返回 `AppSetting[]`。
+- 后端会返回 `null` 的字段，前端类型也使用 `xxx | null`。
+
+当前 API 函数：
+
+```txt
+getSettings()
+updateSetting(code, payload)
+createSession(title)
+getSessions()
+getSession(sessionId)
+sendMessage(sessionId, content)
+```
 
 ## 数据库表
 
@@ -190,20 +216,21 @@ from app.models import ChatMessage, ChatSession
 
 ### 当前 main.py 状态
 
-`backend/app/main.py` 当前只挂载了：
+`backend/app/main.py` 当前已挂载：
 
 ```python
 app.include_router(settings.router)
 app.include_router(feedbacks.router)
-```
-
-还没有挂载：
-
-```python
 app.include_router(chat.router)
 ```
 
-下一步要做这个。
+所以 Swagger 里应该能看到：
+
+```txt
+settings
+feedbacks
+sessions
+```
 
 ## 重要本地配置
 
@@ -290,7 +317,7 @@ pnpm install
 pnpm dev
 ```
 
-## 回家后的下一步
+## 下一步
 
 先打开：
 
@@ -298,39 +325,31 @@ pnpm dev
 plan.md
 ```
 
-从第 16 步继续。
-
-下一步建议是：
+从这里继续：
 
 ```txt
-第 16.3：在 main.py 挂载 chat router
+第 18 步：用前端页面调用 /api/settings，确认前后端连通
 ```
 
 要做的事：
 
-1. 修改 `backend/app/main.py`。
-2. 导入 `chat` router。
-3. 增加 `app.include_router(chat.router)`。
-4. 执行 `python -m compileall app`。
-5. 启动后端。
-6. 打开 Swagger 测试：
-
-```txt
-POST /api/sessions
-GET  /api/sessions
-GET  /api/sessions/{session_id}
-POST /api/sessions/{session_id}/messages
-```
-
-不要直接跳到前端页面。先把后端会话接口联调通过。
+1. 启动 PostgreSQL。
+2. 启动 FastAPI 后端。
+3. 启动 Vite 前端。
+4. 临时修改 `frontend/src/App.tsx`。
+5. 临时修改 `frontend/src/App.css`。
+6. 打开 `http://127.0.0.1:5173`。
+7. 确认页面能显示 `/api/settings` 返回的配置列表。
+8. 在浏览器 Network 里确认 `/api/settings` 是 `200`。
 
 ## 当前仍未完成
 
-- 智能问数接口还没 Swagger 验证。
-- 配置页前端还没做。
+- 第 18 步前端页面联调还没做。
+- 配置页前端还没做成正式页面。
 - 回复校对页前端还没做。
 - 智能问数页前端还没做。
 - 原型页面还没有迁移成 React 组件。
+- 真实 AI 调用还没接入，当前仍然使用 mock AI。
 
 ## 面试讲解方向
 
@@ -346,3 +365,4 @@ POST /api/sessions/{session_id}/messages
   - model：数据库表。
   - schema：接口数据格式。
 - 当前 AI 回复先用 mock，目的是先跑通完整全栈链路，后续可替换成真实大模型调用。
+- 前端先建立 API 请求层，再接页面，避免组件里到处散落 `fetch`。

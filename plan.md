@@ -5988,3 +5988,1416 @@ backend/app/main.py
 ```
 
 回家后从这里继续，不要直接跳到前端。
+
+### 16.3 在 main.py 挂载 chat router
+
+这一步把 `backend/app/routers/chat.py` 里写好的智能问数接口，正式注册到 FastAPI 应用里。
+
+原因：上一轮只是创建了接口文件，并确认语法没问题。但 FastAPI 不会自动扫描 `routers/` 目录。一个 router 文件写好了以后，还必须在 `main.py` 里通过：
+
+```python
+app.include_router(...)
+```
+
+挂到主应用上。
+
+否则会出现这种情况：
+
+- `python -m compileall app` 可以通过。
+- 代码文件也确实存在。
+- 但是 Swagger 里看不到 `/api/sessions`。
+- 浏览器访问 `/api/sessions` 返回 404。
+
+这不是接口代码错，而是还没有把 router 注册进 FastAPI。
+
+前端类比：
+
+- `routers/chat.py` 像你写好了一个页面组件。
+- `main.py` 里的 `app.include_router(chat.router)` 像你把这个页面配置进前端路由表。
+- 组件写好了但没配置路由，浏览器自然访问不到。
+
+#### 16.3.1 修改 main.py
+
+修改文件：
+
+```txt
+backend/app/main.py
+```
+
+目标代码：
+
+```python
+from fastapi import FastAPI
+
+from app.db.session import check_database_connection
+from app.routers import chat, feedbacks, settings
+
+app = FastAPI(title="Full Stack Demo API")
+
+app.include_router(settings.router)
+app.include_router(feedbacks.router)
+app.include_router(chat.router)
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/health/db")
+def database_health_check():
+    check_database_connection()
+    return {"database": "ok"}
+```
+
+重点只有两处。
+
+第一处：
+
+```python
+from app.routers import chat, feedbacks, settings
+```
+
+解释：
+
+- 从 `app/routers/` 目录里导入 3 个路由模块。
+- `settings` 对应应用配置接口。
+- `feedbacks` 对应回复校对接口。
+- `chat` 对应智能问数会话接口。
+
+第二处：
+
+```python
+app.include_router(chat.router)
+```
+
+解释：
+
+- 把 `chat.py` 里的 `router` 注册到 FastAPI 应用。
+- 注册后，`chat.py` 里的这些接口才真正生效：
+
+```txt
+POST /api/sessions
+GET  /api/sessions
+GET  /api/sessions/{session_id}
+POST /api/sessions/{session_id}/messages
+```
+
+#### 16.3.2 检查语法
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m compileall app
+```
+
+如果没有报错，说明 Python 语法没问题。
+
+注意：
+
+- `compileall` 只能证明语法正确。
+- 它不能证明接口真的能访问。
+- 所以后面还要打开 Swagger 测试。
+
+#### 16.3.3 启动后端
+
+如果后端没启动，执行：
+
+```bash
+python -m uvicorn app.main:app --reload
+```
+
+如果后端已经启动了，保存 `main.py` 后，Uvicorn 通常会自动 reload。
+
+终端看到类似：
+
+```txt
+Application startup complete.
+```
+
+说明后端已经重新加载。
+
+#### 16.3.4 打开 Swagger
+
+浏览器打开：
+
+```txt
+http://127.0.0.1:8000/docs
+```
+
+检查是否出现：
+
+```txt
+sessions
+```
+
+这个分组。
+
+如果能看到 `sessions` 分组，说明 `chat.router` 已经挂载成功。
+
+如果看不到：
+
+- 检查 `main.py` 是否导入了 `chat`。
+- 检查是否写了 `app.include_router(chat.router)`。
+- 检查后端是否已经 reload。
+
+#### 16.3.5 测试创建会话
+
+在 Swagger 里找到：
+
+```txt
+POST /api/sessions
+```
+
+点击 `Try it out`。
+
+Request body 填：
+
+```json
+{
+  "title": "新对话"
+}
+```
+
+点击 `Execute`。
+
+成功后应该返回类似：
+
+```json
+{
+  "id": 1,
+  "title": "新对话",
+  "created_at": "2026-06-29T...",
+  "updated_at": "2026-06-29T...",
+  "messages": []
+}
+```
+
+这里为什么只传 `title`：
+
+- `id` 是数据库自动生成的。
+- `created_at` 是数据库自动生成的。
+- `updated_at` 是数据库自动生成的。
+- 新会话刚创建时还没有消息，所以 `messages` 是空数组。
+
+当前阶段可以先用：
+
+```txt
+新对话
+```
+
+作为默认标题。
+
+后面前端接入时也可以用用户第一条问题的前 20 个字作为标题。
+
+#### 16.3.6 测试会话列表
+
+找到：
+
+```txt
+GET /api/sessions
+```
+
+点击 `Try it out`，再点 `Execute`。
+
+应该返回一个数组，里面包含刚创建的会话。
+
+用途：
+
+- 对应智能问数页面左侧的“近30天记录”。
+
+#### 16.3.7 测试会话详情
+
+找到：
+
+```txt
+GET /api/sessions/{session_id}
+```
+
+假设刚才创建会话返回的 `id` 是 `1`，那 `session_id` 填：
+
+```txt
+1
+```
+
+点击 `Execute`。
+
+应该返回 id 为 1 的会话详情。
+
+用途：
+
+- 对应点击历史会话后，加载这条会话里的消息。
+
+#### 16.3.8 测试发送消息
+
+找到：
+
+```txt
+POST /api/sessions/{session_id}/messages
+```
+
+`session_id` 填刚才创建的会话 id，例如：
+
+```txt
+1
+```
+
+Request body 填：
+
+```json
+{
+  "role": "user",
+  "content": "2026年各经营单元的收入和完成率分别是多少？"
+}
+```
+
+点击 `Execute`。
+
+成功后应该返回这个会话，并且 `messages` 里应该有两条消息：
+
+```txt
+user 消息
+assistant 消息
+```
+
+原因：
+
+- 用户发送一条消息后，后端会先保存用户消息。
+- 然后调用 `generate_mock_answer(...)` 生成一条模拟 AI 回复。
+- 再保存 assistant 消息。
+- 最后返回完整会话。
+
+你应该能在返回结果里看到：
+
+```json
+"role": "user"
+```
+
+以及：
+
+```json
+"role": "assistant"
+```
+
+assistant 消息里还会有：
+
+```json
+"answer_data": {
+  "table": "...",
+  "stats": "...",
+  "chart": "...",
+  "suggestions": "..."
+}
+```
+
+这些数据后面会给前端渲染表格、统计项、柱状图和下一步问题建议。
+
+#### 16.3.9 可选测试：错误角色
+
+仍然测试：
+
+```txt
+POST /api/sessions/{session_id}/messages
+```
+
+Request body 改成：
+
+```json
+{
+  "role": "assistant",
+  "content": "这是一条错误测试"
+}
+```
+
+预期返回：
+
+```txt
+400
+```
+
+错误信息类似：
+
+```json
+{
+  "detail": "only user messages can be sent"
+}
+```
+
+原因：
+
+- 这个接口是用户发送问题用的。
+- assistant 回复应该由后端自动生成，不应该由前端直接提交。
+
+#### 16.3.10 本轮验收标准
+
+这一轮完成后，应该确认：
+
+1. `python -m compileall app` 通过。
+2. Swagger 里出现 `sessions` 分组。
+3. `POST /api/sessions` 能创建会话。
+4. `GET /api/sessions` 能看到会话列表。
+5. `GET /api/sessions/{session_id}` 能看到会话详情。
+6. `POST /api/sessions/{session_id}/messages` 能返回用户消息和模拟 AI 回复。
+
+你现在要做：
+
+1. 确认 `backend/app/main.py` 已挂载 `chat.router`。
+2. 执行 `python -m compileall app`。
+3. 打开 `http://127.0.0.1:8000/docs`。
+4. 按 16.3.5 到 16.3.8 依次测试。
+5. 把测试结果发给我。
+
+#### 16.3.11 关于两个 GET 请求能不能合并
+
+你刚刚问到：
+
+```txt
+GET /api/sessions
+GET /api/sessions/{session_id}
+```
+
+这两个接口能不能合并成一个？
+
+答案是：
+
+```txt
+技术上可以合并，但当前不建议合并。
+```
+
+原因不是因为代码做不到，而是因为这两个接口表达的是两类不同的资源读取动作。
+
+第一个：
+
+```txt
+GET /api/sessions
+```
+
+表示“读取会话集合”。
+
+它对应前端左侧历史列表，比如：
+
+```txt
+近30天记录
+```
+
+前端拿到它以后，一般用于渲染：
+
+- 会话标题。
+- 会话 id。
+- 更新时间。
+- 可能还有分页、搜索、排序。
+
+它的返回值通常是一个数组：
+
+```json
+[
+  {
+    "id": 1,
+    "title": "新对话"
+  },
+  {
+    "id": 2,
+    "title": "经营分析"
+  }
+]
+```
+
+第二个：
+
+```txt
+GET /api/sessions/{session_id}
+```
+
+表示“读取某一个具体会话”。
+
+它对应前端点击某条历史记录后，加载这条会话的完整内容。
+
+它的返回值通常是一个对象：
+
+```json
+{
+  "id": 1,
+  "title": "新对话",
+  "messages": []
+}
+```
+
+这两个接口如果强行合并，可能会变成：
+
+```txt
+GET /api/sessions?id=1
+```
+
+或者：
+
+```txt
+GET /api/sessions?mode=detail&id=1
+```
+
+这样虽然能工作，但会带来几个问题。
+
+第一个问题：接口语义会变模糊。
+
+```txt
+GET /api/sessions
+```
+
+本来很清楚地表示“会话列表”。
+
+```txt
+GET /api/sessions/1
+```
+
+本来很清楚地表示“id 为 1 的会话”。
+
+如果全部塞进一个接口，前端和后端都需要额外判断参数，读代码时也没那么直观。
+
+第二个问题：返回数据结构可能不稳定。
+
+如果一个接口有时候返回数组：
+
+```json
+[]
+```
+
+有时候返回对象：
+
+```json
+{}
+```
+
+前端 TypeScript 类型会变复杂。
+
+你可能需要写成：
+
+```ts
+ChatSession[] | ChatSession
+```
+
+这样后面每次使用都要判断：
+
+```ts
+Array.isArray(data)
+```
+
+对于当前项目没有必要。
+
+第三个问题：列表接口和详情接口后期优化方向不同。
+
+真实项目里，列表接口通常不应该返回完整消息内容。
+
+比如左侧历史列表只需要：
+
+```txt
+id
+title
+updated_at
+```
+
+不一定需要每个会话下面全部 messages。
+
+否则如果用户有 100 个会话，每个会话 20 条消息，打开页面时就会一次性加载 2000 条消息。
+
+这会让接口变慢，也会浪费前端内存。
+
+所以更常见的设计是：
+
+```txt
+GET /api/sessions
+```
+
+返回轻量列表。
+
+```txt
+GET /api/sessions/{session_id}
+```
+
+返回某一个会话的完整详情。
+
+当前 demo 里 `GET /api/sessions` 也返回了 `messages`，这是为了前期少写几个 schema，让你先把主流程跑通。
+
+后面如果要更贴近真实业务，可以再拆成：
+
+```txt
+ChatSessionListItem
+ChatSessionRead
+```
+
+也就是：
+
+- 列表接口用 `ChatSessionListItem`，只返回轻量字段。
+- 详情接口用 `ChatSessionRead`，返回完整消息。
+
+但这属于后续优化，不影响现在继续往前走。
+
+前端类比一下：
+
+```txt
+GET /api/sessions
+```
+
+像是拿“文章列表”。
+
+```txt
+GET /api/sessions/1
+```
+
+像是点进某一篇文章，拿“文章详情”。
+
+文章列表和文章详情当然可以都叫一个接口，但分开会更清楚，也更方便维护。
+
+所以当前结论：
+
+```txt
+保留两个 GET。
+```
+
+当前页面会这样使用：
+
+- 页面首次打开：调用 `GET /api/sessions`，渲染左侧历史列表。
+- 用户点击某条历史会话：调用 `GET /api/sessions/{session_id}`，渲染中间聊天内容。
+- 用户发送问题：调用 `POST /api/sessions/{session_id}/messages`，保存用户消息并返回 AI 回复。
+
+#### 16.3.12 你这轮已经完成的验收结果
+
+从你发的截图看，这一轮已经完成：
+
+1. `POST /api/sessions` 创建会话成功。
+2. `GET /api/sessions` 获取会话列表成功。
+3. `GET /api/sessions/{session_id}` 获取单个会话成功。
+4. `POST /api/sessions/{session_id}/messages` 发送用户消息成功。
+5. 后端自动生成了 assistant 回复。
+6. 返回结果里包含 `answer_data`，后面可以给前端渲染表格、统计项、图表和建议问题。
+
+到这里，后端的核心业务闭环已经跑通：
+
+```txt
+创建会话 -> 查询会话 -> 发送问题 -> 保存用户消息 -> 生成模拟 AI 回复 -> 返回完整会话
+```
+
+下一步可以开始做前端和后端的连接层。
+
+---
+
+## 第 17 步：前端接入后端前的 API 基础层
+
+这一轮先不急着改页面。
+
+先做一件基础但很重要的事：
+
+```txt
+让前端有一个统一的地方负责请求后端接口。
+```
+
+前端类比：
+
+如果你在每个组件里都直接写：
+
+```ts
+fetch("http://127.0.0.1:8000/api/settings")
+```
+
+短期可以跑，长期会很乱。
+
+因为后面会有很多接口：
+
+```txt
+/api/settings
+/api/settings/{code}
+/api/feedbacks
+/api/sessions
+/api/sessions/{session_id}
+/api/sessions/{session_id}/messages
+```
+
+如果每个页面都自己拼 URL、自己处理 JSON、自己处理错误，代码会很快散掉。
+
+所以第 17 步先做三件事：
+
+1. 在 Vite 里配置后端代理。
+2. 新建统一的 HTTP 请求工具。
+3. 新建前端 API 类型和接口函数。
+
+### 17.1 为什么需要 Vite proxy
+
+现在后端运行在：
+
+```txt
+http://127.0.0.1:8000
+```
+
+前端 Vite 通常运行在：
+
+```txt
+http://127.0.0.1:5173
+```
+
+浏览器会认为它们是两个不同来源：
+
+```txt
+端口不同 = 来源不同
+```
+
+如果前端直接请求：
+
+```ts
+fetch("http://127.0.0.1:8000/api/settings")
+```
+
+可能会遇到跨域问题，也会让代码写死后端地址。
+
+更好的做法是在开发环境让 Vite 代理：
+
+```txt
+前端请求 /api/settings
+Vite 转发到 http://127.0.0.1:8000/api/settings
+```
+
+这样前端代码只需要写：
+
+```ts
+fetch("/api/settings")
+```
+
+它不关心后端具体跑在哪个端口。
+
+### 17.2 修改 frontend/vite.config.ts
+
+打开：
+
+```txt
+frontend/vite.config.ts
+```
+
+改成：
+
+```ts
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+    },
+  },
+});
+```
+
+这里每一段的意思：
+
+```ts
+server
+```
+
+表示 Vite 开发服务器配置。
+
+```ts
+proxy
+```
+
+表示代理规则。
+
+```ts
+"/api"
+```
+
+表示所有以 `/api` 开头的请求都交给代理。
+
+```ts
+target: "http://127.0.0.1:8000"
+```
+
+表示真实后端地址。
+
+```ts
+changeOrigin: true
+```
+
+表示转发请求时，把请求来源调整成目标服务更容易接受的形式。
+
+你可以简单理解为：
+
+```txt
+让 Vite 帮前端把请求转发给 FastAPI。
+```
+
+### 17.3 新建 frontend/src/api/http.ts
+
+新建目录：
+
+```txt
+frontend/src/api
+```
+
+新建文件：
+
+```txt
+frontend/src/api/http.ts
+```
+
+写入：
+
+```ts
+type RequestOptions = {
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  body?: unknown;
+};
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await fetch(path, {
+    method: options.method ?? "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export const http = {
+  get<T>(path: string) {
+    return request<T>(path);
+  },
+  post<T>(path: string, body: unknown) {
+    return request<T>(path, { method: "POST", body });
+  },
+  patch<T>(path: string, body: unknown) {
+    return request<T>(path, { method: "PATCH", body });
+  },
+};
+```
+
+这个文件的作用：
+
+```txt
+统一处理 fetch、JSON、错误状态。
+```
+
+以后组件里不直接写 fetch。
+
+组件只调用：
+
+```ts
+http.get(...)
+http.post(...)
+http.patch(...)
+```
+
+### 17.4 新建 frontend/src/api/types.ts
+
+新建文件：
+
+```txt
+frontend/src/api/types.ts
+```
+
+写入：
+
+```ts
+export type AppSetting = {
+  id: number;
+  code: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type ChatMessage = {
+  id: number;
+  session_id: number;
+  role: "user" | "assistant";
+  content: string;
+  answer_data: Record<string, unknown> | null;
+  elapsed_ms: number | null;
+  token_count: number | null;
+  created_at: string;
+};
+
+export type ChatSession = {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: ChatMessage[];
+};
+
+export type Feedback = {
+  id: number;
+  user_name: string;
+  question: string;
+  ai_answer: string;
+  status: string;
+  remark: string | null;
+  message_id: number | null;
+  created_at: string;
+  handled_at: string | null;
+};
+```
+
+这里为什么时间字段先写成 `string`：
+
+后端返回的是 JSON。
+
+JSON 没有真正的 `Date` 类型。
+
+所以后端的：
+
+```python
+datetime
+```
+
+传到前端后会变成：
+
+```ts
+string
+```
+
+例如：
+
+```txt
+2026-06-29T11:49:40.589012Z
+```
+
+后面前端展示时，再决定要不要格式化成：
+
+```txt
+2026-06-29 19:49
+```
+
+### 17.5 新建 frontend/src/api/settings.ts
+
+新建文件：
+
+```txt
+frontend/src/api/settings.ts
+```
+
+写入：
+
+```ts
+import { http } from "./http";
+import type { AppSetting } from "./types";
+
+export function getSettings() {
+  return http.get<AppSetting[]>("/api/settings");
+}
+
+export function updateSetting(
+  code: string,
+  payload: Pick<AppSetting, "enabled" | "config">,
+) {
+  return http.patch<AppSetting>(`/api/settings/${code}`, payload);
+}
+```
+
+这里先接入 settings，是因为它最简单：
+
+```txt
+GET /api/settings
+PATCH /api/settings/{code}
+```
+
+能验证前端代理和请求封装是否可用。
+
+### 17.6 新建 frontend/src/api/chat.ts
+
+新建文件：
+
+```txt
+frontend/src/api/chat.ts
+```
+
+写入：
+
+```ts
+import { http } from "./http";
+import type { ChatSession } from "./types";
+
+export function createSession(title: string) {
+  return http.post<ChatSession>("/api/sessions", { title });
+}
+
+export function getSessions() {
+  return http.get<ChatSession[]>("/api/sessions");
+}
+
+export function getSession(sessionId: number) {
+  return http.get<ChatSession>(`/api/sessions/${sessionId}`);
+}
+
+export function sendMessage(sessionId: number, content: string) {
+  return http.post<ChatSession>(`/api/sessions/${sessionId}/messages`, {
+    role: "user",
+    content,
+  });
+}
+```
+
+这几个函数和刚刚 Swagger 里测过的接口一一对应。
+
+前端后面会这样用：
+
+```ts
+const session = await createSession("新对话");
+const updatedSession = await sendMessage(session.id, "2026年各经营单元的收入和完成率分别是多少？");
+```
+
+### 17.7 检查前端能否编译
+
+进入前端目录：
+
+```bash
+cd frontend
+```
+
+执行：
+
+```bash
+pnpm build
+```
+
+如果成功，说明：
+
+- TypeScript 类型没有明显错误。
+- 新增的 API 文件语法正确。
+- Vite 项目仍然能正常构建。
+
+### 17.8 这一轮暂时不验证接口请求
+
+这一轮先只验证编译。
+
+原因：
+
+这些 API 函数还没有被页面调用。
+
+真正的接口联调会放到下一步：
+
+```txt
+第 18 步：用前端页面调用 /api/settings，确认前后端连通
+```
+
+到时候会在页面里临时展示 settings 数据，确认：
+
+```txt
+React -> Vite proxy -> FastAPI -> PostgreSQL
+```
+
+这条链路完整打通。
+
+### 17.9 本轮验收标准
+
+完成第 17 步后，应该满足：
+
+1. `frontend/vite.config.ts` 已配置 `/api` 代理。
+2. 存在 `frontend/src/api/http.ts`。
+3. 存在 `frontend/src/api/types.ts`。
+4. 存在 `frontend/src/api/settings.ts`。
+5. 存在 `frontend/src/api/chat.ts`。
+6. 在 `frontend` 目录执行 `pnpm build` 通过。
+
+你现在要做：
+
+1. 按 17.2 到 17.6 新增和修改文件。
+2. 执行 `cd frontend`。
+3. 执行 `pnpm build`。
+4. 把结果发给我。
+
+### 17.10 你这轮已经完成的验收结果
+
+你已经完成第 17 步。
+
+从截图和提交前复查结果看：
+
+1. `frontend/vite.config.ts` 已配置 `/api` 代理。
+2. `frontend/src/api/http.ts` 已创建。
+3. `frontend/src/api/types.ts` 已创建。
+4. `frontend/src/api/settings.ts` 已创建。
+5. `frontend/src/api/chat.ts` 已创建。
+6. `pnpm build` 已通过。
+
+提交前还修正了两个小点：
+
+1. `/api/settings` 后端返回的是数组，所以前端函数命名和类型使用 `getSettings(): Promise<AppSetting[]>`。
+2. 后端会返回 `null` 的字段，前端类型也写成 `xxx | null`，这样更贴近真实接口。
+
+---
+
+## 第 18 步：用前端页面调用 `/api/settings`，确认前后端连通
+
+第 17 步只是把“前端请求层”准备好了。
+
+但这些函数还没有真的被 React 页面调用。
+
+第 18 步要验证完整链路：
+
+```txt
+React 页面
+  -> getSettings()
+  -> http.get("/api/settings")
+  -> Vite proxy
+  -> FastAPI /api/settings
+  -> PostgreSQL app_settings
+  -> 返回数据给 React
+```
+
+这一步不是做最终页面。
+
+它只是一个联调页，目标是确认：
+
+```txt
+前端真的能拿到后端数据库里的配置数据。
+```
+
+### 18.1 启动后端
+
+先确认 PostgreSQL 正在运行。
+
+在项目根目录执行：
+
+```bash
+docker compose ps
+```
+
+如果 `postgres` 没启动，执行：
+
+```bash
+docker compose up -d postgres
+```
+
+然后启动后端。
+
+进入后端目录：
+
+```bash
+cd backend
+```
+
+激活虚拟环境：
+
+```bash
+source .venv/bin/activate
+```
+
+启动 FastAPI：
+
+```bash
+python -m uvicorn app.main:app --reload
+```
+
+后端应该运行在：
+
+```txt
+http://127.0.0.1:8000
+```
+
+可以先打开：
+
+```txt
+http://127.0.0.1:8000/api/settings
+```
+
+确认后端本身能返回配置列表。
+
+### 18.2 启动前端
+
+新开一个终端。
+
+进入前端目录：
+
+```bash
+cd frontend
+```
+
+启动 Vite：
+
+```bash
+pnpm dev
+```
+
+前端通常运行在：
+
+```txt
+http://127.0.0.1:5173
+```
+
+### 18.3 修改 `frontend/src/App.tsx`
+
+先把 Vite 默认模板换成一个临时联调页面。
+
+打开：
+
+```txt
+frontend/src/App.tsx
+```
+
+临时改成：
+
+```tsx
+import { useEffect, useState } from "react";
+import "./App.css";
+import { getSettings } from "./api/settings";
+import type { AppSetting } from "./api/types";
+
+function App() {
+  const [settings, setSettings] = useState<AppSetting[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getSettings()
+      .then((data) => {
+        setSettings(data);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "请求失败");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, []);
+
+  return (
+    <main className="page">
+      <section className="panel">
+        <h1>前后端联调</h1>
+        <p className="description">
+          当前页面会通过 Vite proxy 调用 FastAPI 的 /api/settings 接口。
+        </p>
+
+        {loading && <p>加载中...</p>}
+        {error && <p className="error">{error}</p>}
+
+        {!loading && !error && (
+          <div className="settings-list">
+            {settings.map((item) => (
+              <article className="setting-card" key={item.code}>
+                <div>
+                  <h2>{item.name}</h2>
+                  <p>{item.description}</p>
+                </div>
+                <span className={item.enabled ? "badge enabled" : "badge disabled"}>
+                  {item.enabled ? "已开启" : "已关闭"}
+                </span>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+export default App;
+```
+
+这里几个点要理解：
+
+```tsx
+useEffect(...)
+```
+
+表示组件首次渲染后，执行一次请求。
+
+类比前端里常见的：
+
+```txt
+页面 mounted 后请求接口
+```
+
+```tsx
+useState<AppSetting[]>([])
+```
+
+表示 `settings` 是一个数组，数组里的每一项符合 `AppSetting` 类型。
+
+```tsx
+getSettings()
+```
+
+就是第 17 步封装的 API 函数。
+
+组件不用关心真实请求地址，也不用直接写 `fetch`。
+
+```tsx
+loading
+error
+settings
+```
+
+这是前端请求接口时最常见的三个状态：
+
+- `loading`：正在加载。
+- `error`：请求失败。
+- `settings`：请求成功后的数据。
+
+### 18.4 临时修改 `frontend/src/App.css`
+
+打开：
+
+```txt
+frontend/src/App.css
+```
+
+为了这一步联调，可以先把原来的 Vite 模板样式替换成：
+
+```css
+.page {
+  min-height: 100vh;
+  background: #f6f7fb;
+  color: #172033;
+  padding: 40px;
+  box-sizing: border-box;
+}
+
+.panel {
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.description {
+  color: #667085;
+  margin-bottom: 24px;
+}
+
+.settings-list {
+  display: grid;
+  gap: 12px;
+}
+
+.setting-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border: 1px solid #d8deea;
+  border-radius: 8px;
+  background: #fff;
+  padding: 18px 20px;
+}
+
+.setting-card h2 {
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+.setting-card p {
+  margin: 0;
+  color: #667085;
+}
+
+.badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 14px;
+}
+
+.badge.enabled {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge.disabled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.error {
+  color: #b42318;
+}
+```
+
+这只是临时联调样式。
+
+等真正做页面时，还会重新整理整体布局和视觉。
+
+### 18.5 浏览器验收
+
+打开：
+
+```txt
+http://127.0.0.1:5173
+```
+
+如果成功，你应该能看到配置项列表，例如：
+
+```txt
+对话开场白
+下一步问题建议
+文字转语音
+语音转文字
+模型配置
+常问设置
+```
+
+如果页面显示这些内容，说明链路已经通了：
+
+```txt
+React -> FastAPI -> PostgreSQL
+```
+
+### 18.6 常见错误
+
+如果页面报错：
+
+```txt
+Failed to fetch
+```
+
+先检查后端是否启动。
+
+如果页面报错：
+
+```txt
+Unexpected token
+```
+
+可能是接口返回了 HTML 错误页，而不是 JSON。
+
+这时打开浏览器开发者工具，看 Network 里的 `/api/settings` 请求。
+
+如果 `/api/settings` 返回 404：
+
+检查：
+
+1. 后端是否运行在 `http://127.0.0.1:8000`。
+2. `frontend/vite.config.ts` 里 `/api` proxy 是否配置正确。
+3. 修改 Vite 配置后是否重新启动过 `pnpm dev`。
+
+注意：
+
+```txt
+修改 vite.config.ts 后，要重启 pnpm dev。
+```
+
+### 18.7 本轮验收标准
+
+完成第 18 步后，应该满足：
+
+1. 后端正在运行。
+2. 前端正在运行。
+3. 浏览器打开 `http://127.0.0.1:5173`。
+4. 页面能显示从 `/api/settings` 返回的配置列表。
+5. 浏览器 Network 里能看到 `/api/settings` 请求状态是 `200`。
+
+你下一次要做：
+
+1. 按第 18 步修改 `App.tsx` 和 `App.css`。
+2. 同时启动后端和前端。
+3. 打开页面检查配置列表。
+4. 把页面截图或报错发给我。
