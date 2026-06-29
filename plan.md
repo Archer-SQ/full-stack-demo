@@ -4457,3 +4457,1534 @@ Request body 填：
 7. 测试 `GET /api/feedbacks/{feedback_id}`。
 8. 测试 `PATCH /api/feedbacks/{feedback_id}`。
 9. 把结果发给我。
+
+## 第 15 步验收结果：回复校对接口已完成
+
+你已经用 Swagger 验证过：
+
+- `POST /api/feedbacks`：可以创建一条待处理反馈。
+- `GET /api/feedbacks`：可以分页查询反馈列表。
+- `GET /api/feedbacks?question=北京`：可以按问题关键字筛选。
+- `GET /api/feedbacks?user=管理员`：可以按用户筛选。
+- `GET /api/feedbacks?status=pending`：可以按状态筛选。
+- `GET /api/feedbacks/1`：可以查询反馈详情。
+- `PATCH /api/feedbacks/1`：可以把反馈处理成 `resolved`，并写入备注和处理时间。
+
+这一页对应原型里的「反馈管理 / 回复校对」。到这里为止，我们已经有了一个完整的 CRUD 模块：
+
+- C：创建反馈。
+- R：查询列表和详情。
+- U：处理反馈。
+- D：这个页面原型里不需要删除，所以暂时不做。
+
+## 第 16 步：创建智能问数接口
+
+这一页对应第一张原型图，也就是左侧有「近30天记录」，中间可以问问题，AI 返回表格、统计和图表。
+
+这一阶段先做“模拟 AI 回复”，不直接接真实大模型。
+
+原因：
+
+- 面试 demo 的重点是证明你能打通前端、后端、数据库、Docker 这条链路。
+- 真实 AI 接口需要 API Key、费用、网络稳定性，容易让 demo 变复杂。
+- 我们先把接口结构设计成真实业务能扩展的样子，后面把 `mock_ai.py` 替换成真实模型调用即可。
+
+前端类比：
+
+- `ChatSession` 像左侧的一条会话记录。
+- `ChatMessage` 像聊天窗口里的一条消息气泡。
+- `answer_data` 像后端返回给前端渲染表格、统计、图表的 JSON 配置。
+- `routers/chat.py` 像前端里的 `api/chat.ts`，负责把功能暴露成 HTTP 接口。
+
+本轮只做一件事：
+
+```txt
+先创建 backend/app/services/mock_ai.py
+```
+
+先不要急着写 `routers/chat.py`，也先不要改 `main.py`。
+
+原因：
+
+- `mock_ai.py` 是业务逻辑层，先把“AI 应该返回什么数据结构”定下来。
+- `routers/chat.py` 是接口层，下一步再把这个业务逻辑暴露成 HTTP 接口。
+- 如果把业务逻辑和接口混在一个文件里，后面接真实 AI 或前端联调时会很乱。
+
+前端类比：
+
+- `mock_ai.py` 像前端项目里的 `mock/chat.ts` 或 `services/chatMock.ts`。
+- `routers/chat.py` 像前端项目里的接口封装 `api/chat.ts`。
+- 页面组件不应该直接写死假数据，后端接口也不应该把所有业务逻辑都堆在 router 里。
+
+### 16.1 创建模拟 AI 服务
+
+创建文件：
+
+```txt
+backend/app/services/mock_ai.py
+```
+
+写入：
+
+```python
+from __future__ import annotations
+
+import time
+from typing import Any
+
+
+BUSINESS_TARGET_ROWS = [
+    {"business_unit": "北京代表处", "year": 2026, "business_target": 7950, "solution_target": 1200},
+    {"business_unit": "上海代表处", "year": 2026, "business_target": 7070, "solution_target": 980},
+    {"business_unit": "浙江代表处", "year": 2026, "business_target": 6460, "solution_target": 860},
+    {"business_unit": "江苏代表处", "year": 2026, "business_target": 5560, "solution_target": 720},
+    {"business_unit": "山东代表处", "year": 2026, "business_target": 4090, "solution_target": 650},
+]
+
+
+def _build_business_target_answer() -> dict[str, Any]:
+    total = sum(row["business_target"] for row in BUSINESS_TARGET_ROWS)
+    average = round(total / len(BUSINESS_TARGET_ROWS))
+    max_row = max(BUSINESS_TARGET_ROWS, key=lambda row: row["business_target"])
+    min_row = min(BUSINESS_TARGET_ROWS, key=lambda row: row["business_target"])
+
+    return {
+        "title": "经营单元收入&完成率分析",
+        "description": "2026年各经营单元商业目标与商解目标对比（单位：万元）",
+        "table": {
+            "columns": [
+                {"key": "business_unit", "label": "经营单元"},
+                {"key": "year", "label": "年度"},
+                {"key": "business_target", "label": "商业目标(万)"},
+                {"key": "solution_target", "label": "商解目标(万)"},
+            ],
+            "rows": BUSINESS_TARGET_ROWS,
+        },
+        "stats": [
+            {"label": "总记录数", "value": f"{len(BUSINESS_TARGET_ROWS)} 条"},
+            {"label": "平均值", "value": f"¥{average:,}万"},
+            {"label": "最大值", "value": f"¥{max_row['business_target']:,}万（{max_row['business_unit']}）"},
+            {"label": "最小值", "value": f"¥{min_row['business_target']:,}万（{min_row['business_unit']}）"},
+        ],
+        "chart": {
+            "type": "bar",
+            "title": "经营单元目标对比",
+            "x_key": "business_unit",
+            "series": [
+                {"key": "business_target", "name": "商业目标", "color": "#2563eb"},
+                {"key": "solution_target", "name": "商解目标", "color": "#10b981"},
+            ],
+        },
+        "suggestions": ["目标差异是什么？", "目标如何设定？", "未来趋势如何？"],
+    }
+
+
+def generate_mock_answer(question: str) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    answer_data = _build_business_target_answer()
+
+    content = "已生成经营单元收入与完成率分析，包含数据表格、统计结果和目标对比图。"
+    if "经营单元" not in question and "完成率" not in question:
+        content = "我先按经营单元收入与完成率分析场景返回一份演示数据，后续可以继续扩展问题分类。"
+
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+
+    return {
+        "content": content,
+        "answer_data": answer_data,
+        "elapsed_ms": max(elapsed_ms, 1),
+        "token_count": len(question) + len(content),
+    }
+```
+
+这里的 `mock_ai.py` 可以理解成前端里的 `mock.ts`：
+
+- 现在先返回固定数据。
+- 以后接真实 AI 时，只需要保持返回结构不变。
+- 前端页面不需要知道数据是真 AI 生成的，还是 mock 生成的。
+
+这段代码重点理解这些地方：
+
+- `BUSINESS_TARGET_ROWS`：模拟数据库或 AI 计算出来的业务数据，先写死成数组。
+- `_build_business_target_answer()`：把原始数据整理成前端能直接渲染的结构。
+- `table.columns`：告诉前端表格有哪些列。
+- `table.rows`：告诉前端表格有哪些行。
+- `stats`：对应截图里的「总记录数、平均值、最大值、最小值」。
+- `chart`：对应截图里的柱状图配置。
+- `suggestions`：对应截图底部的快捷追问按钮。
+- `generate_mock_answer(question)`：对外暴露的函数，后面 router 只调用这个函数，不关心内部怎么生成答案。
+- `elapsed_ms`：模拟耗时，后面可以显示“耗时 0.6s”。
+- `token_count`：模拟 token 数，后面可以显示“Token:342”。
+
+### 16.1.1 Python 写法逐行解释
+
+先看文件顶部：
+
+```python
+from __future__ import annotations
+
+import time
+from typing import Any
+```
+
+#### from __future__ import annotations
+
+这句可以先理解成 Python 的“兼容性设置”。
+
+它让类型标注的处理更灵活，尤其是项目慢慢变复杂后，类型之间互相引用时不容易出问题。
+
+前端类比：
+
+```ts
+// 有点像开启一种更现代、更宽容的类型处理方式
+```
+
+现阶段你不需要死记它，知道它不是业务逻辑即可。
+
+#### import time
+
+```python
+import time
+```
+
+这是导入 Python 内置的 `time` 模块。
+
+后面会用：
+
+```python
+time.perf_counter()
+```
+
+来计算这次模拟 AI 回复花了多少时间。
+
+前端类比：
+
+```ts
+const startedAt = performance.now()
+```
+
+#### from typing import Any
+
+```python
+from typing import Any
+```
+
+`Any` 表示“任意类型”。
+
+这里会用在：
+
+```python
+def _build_business_target_answer() -> dict[str, Any]:
+```
+
+意思是：这个函数返回一个字典，key 是字符串，value 可以是任意类型。
+
+为什么 value 要用 `Any`？
+
+因为返回的数据里有字符串、数组、对象、数字，结构比较复杂：
+
+```python
+{
+    "title": "经营单元收入&完成率分析",
+    "table": {...},
+    "stats": [...],
+    "chart": {...},
+}
+```
+
+前端类比：
+
+```ts
+function buildBusinessTargetAnswer(): Record<string, any> {
+  return {
+    title: "...",
+    table: {},
+    stats: [],
+    chart: {},
+  }
+}
+```
+
+#### def 是什么
+
+Python 用 `def` 定义函数：
+
+```python
+def _build_business_target_answer() -> dict[str, Any]:
+```
+
+前端类比：
+
+```ts
+function buildBusinessTargetAnswer(): Record<string, any> {
+}
+```
+
+注意 Python 函数后面有一个冒号：
+
+```python
+:
+```
+
+函数内部代码靠缩进表示，不用 `{}`。
+
+前端写法：
+
+```ts
+function test() {
+  const a = 1
+}
+```
+
+Python 写法：
+
+```python
+def test():
+    a = 1
+```
+
+所以 Python 对缩进很敏感。
+
+#### -> dict[str, Any] 是什么
+
+```python
+def _build_business_target_answer() -> dict[str, Any]:
+```
+
+`-> dict[str, Any]` 是返回值类型标注。
+
+意思是：
+
+```txt
+这个函数预计返回一个 dict
+dict 的 key 是 str
+dict 的 value 可以是 Any
+```
+
+它类似 TypeScript 的返回类型：
+
+```ts
+function buildBusinessTargetAnswer(): Record<string, any> {
+}
+```
+
+注意：
+
+- Python 的类型标注默认主要是给开发者和编辑器看的。
+- 它不像 TypeScript 那样在编译阶段强制拦截所有类型错误。
+- 但是写上类型标注，代码更容易读，也更像正规后端项目。
+
+下面这一段是第一次看 Python 时最容易卡住的地方：
+
+```python
+total = sum(row["business_target"] for row in BUSINESS_TARGET_ROWS)
+average = round(total / len(BUSINESS_TARGET_ROWS))
+max_row = max(BUSINESS_TARGET_ROWS, key=lambda row: row["business_target"])
+min_row = min(BUSINESS_TARGET_ROWS, key=lambda row: row["business_target"])
+```
+
+先看数据结构。
+
+`BUSINESS_TARGET_ROWS` 是一个列表，类似 JavaScript 里的数组：
+
+```python
+BUSINESS_TARGET_ROWS = [
+    {"business_unit": "北京代表处", "year": 2026, "business_target": 7950, "solution_target": 1200},
+    {"business_unit": "上海代表处", "year": 2026, "business_target": 7070, "solution_target": 980},
+]
+```
+
+前端类比：
+
+```ts
+const BUSINESS_TARGET_ROWS = [
+  { business_unit: "北京代表处", year: 2026, business_target: 7950, solution_target: 1200 },
+  { business_unit: "上海代表处", year: 2026, business_target: 7070, solution_target: 980 },
+]
+```
+
+Python 里的 `{}` 是字典 `dict`，很像 JS 里的普通对象。
+
+取值方式是：
+
+```python
+row["business_target"]
+```
+
+前端类比：
+
+```ts
+row.business_target
+// 或
+row["business_target"]
+```
+
+#### total 这一行
+
+```python
+total = sum(row["business_target"] for row in BUSINESS_TARGET_ROWS)
+```
+
+意思是：
+
+1. 遍历 `BUSINESS_TARGET_ROWS` 里的每一条数据。
+2. 每一条临时叫做 `row`。
+3. 从每个 `row` 里拿出 `business_target`。
+4. 用 `sum(...)` 把这些数字加起来。
+
+展开写就是：
+
+```python
+total = 0
+
+for row in BUSINESS_TARGET_ROWS:
+    total = total + row["business_target"]
+```
+
+前端类比：
+
+```ts
+const total = BUSINESS_TARGET_ROWS.reduce((sum, row) => {
+  return sum + row.business_target
+}, 0)
+```
+
+这里的：
+
+```python
+row["business_target"] for row in BUSINESS_TARGET_ROWS
+```
+
+叫“生成器表达式”，可以先简单理解成 Python 里的轻量版 `map`。
+
+前端类比：
+
+```ts
+BUSINESS_TARGET_ROWS.map(row => row.business_target)
+```
+
+区别是：
+
+- `map` 会先生成一个新数组。
+- Python 这个写法不会立刻生成完整列表，而是边遍历边给 `sum` 用。
+- 现在不用深究性能，先理解成“遍历并取出某个字段”即可。
+
+#### average 这一行
+
+```python
+average = round(total / len(BUSINESS_TARGET_ROWS))
+```
+
+拆开看：
+
+```python
+len(BUSINESS_TARGET_ROWS)
+```
+
+表示列表长度。
+
+前端类比：
+
+```ts
+BUSINESS_TARGET_ROWS.length
+```
+
+所以：
+
+```python
+total / len(BUSINESS_TARGET_ROWS)
+```
+
+就是：
+
+```txt
+总数 / 条数
+```
+
+也就是平均值。
+
+`round(...)` 表示四舍五入。
+
+前端类比：
+
+```ts
+Math.round(total / BUSINESS_TARGET_ROWS.length)
+```
+
+注意：
+
+- Python 里的 `/` 是普通除法，结果可能是小数。
+- `round(...)` 会把结果取整。
+
+#### max_row 这一行
+
+```python
+max_row = max(BUSINESS_TARGET_ROWS, key=lambda row: row["business_target"])
+```
+
+这行的意思是：
+
+```txt
+从 BUSINESS_TARGET_ROWS 里找出 business_target 最大的那一整条数据
+```
+
+不是只返回最大数字，而是返回整条 row。
+
+比如结果会是：
+
+```python
+{"business_unit": "北京代表处", "year": 2026, "business_target": 7950, "solution_target": 1200}
+```
+
+`max(...)` 是 Python 内置函数，用来找最大值。
+
+如果列表里全是数字，可以直接写：
+
+```python
+max([1, 3, 2])
+```
+
+结果是：
+
+```txt
+3
+```
+
+但现在列表里不是数字，而是一堆字典。
+
+Python 不知道应该按哪个字段比较，所以我们要告诉它：
+
+```python
+key=lambda row: row["business_target"]
+```
+
+意思是：
+
+```txt
+比较大小时，请用每一条 row 的 business_target 字段作为比较依据
+```
+
+前端类比：
+
+```ts
+const maxRow = BUSINESS_TARGET_ROWS.reduce((max, row) => {
+  return row.business_target > max.business_target ? row : max
+})
+```
+
+#### lambda 是什么
+
+```python
+lambda row: row["business_target"]
+```
+
+`lambda` 是 Python 里的匿名函数。
+
+前端类比：
+
+```ts
+(row) => row.business_target
+```
+
+所以这句：
+
+```python
+key=lambda row: row["business_target"]
+```
+
+可以类比成：
+
+```ts
+key: (row) => row.business_target
+```
+
+如果不用 `lambda`，也可以写成普通函数：
+
+```python
+def get_business_target(row):
+    return row["business_target"]
+
+
+max_row = max(BUSINESS_TARGET_ROWS, key=get_business_target)
+```
+
+这和下面这句效果一样：
+
+```python
+max_row = max(BUSINESS_TARGET_ROWS, key=lambda row: row["business_target"])
+```
+
+所以你可以把 `lambda` 先理解成：
+
+```txt
+只用一次的小函数
+```
+
+#### min_row 这一行
+
+```python
+min_row = min(BUSINESS_TARGET_ROWS, key=lambda row: row["business_target"])
+```
+
+和 `max_row` 完全一样，只是找最小值。
+
+意思是：
+
+```txt
+从 BUSINESS_TARGET_ROWS 里找出 business_target 最小的那一整条数据
+```
+
+前端类比：
+
+```ts
+const minRow = BUSINESS_TARGET_ROWS.reduce((min, row) => {
+  return row.business_target < min.business_target ? row : min
+})
+```
+
+#### 为什么 max_row 和 min_row 返回整条数据
+
+因为页面统计里不只是要显示数字，还要显示这个数字属于谁。
+
+比如截图里要显示：
+
+```txt
+最大值：¥7,950万（北京代表处）
+最小值：¥4,090万（山东代表处）
+```
+
+如果只拿到最大数字 `7950`，就不知道它对应哪个经营单元。
+
+所以我们要拿整条数据：
+
+```python
+max_row["business_target"]
+max_row["business_unit"]
+```
+
+前端类比：
+
+```ts
+maxRow.business_target
+maxRow.business_unit
+```
+
+#### f-string 是什么
+
+后面还有这种写法：
+
+```python
+f"¥{average:,}万"
+```
+
+这是 Python 的字符串模板，叫 f-string。
+
+前端类比：
+
+```ts
+`¥${average}万`
+```
+
+其中：
+
+```python
+{average:,}
+```
+
+里的 `:,` 表示加千分位分隔符。
+
+例如：
+
+```python
+average = 6226
+f"¥{average:,}万"
+```
+
+结果是：
+
+```txt
+¥6,226万
+```
+
+#### generate_mock_answer 里的计时
+
+```python
+started_at = time.perf_counter()
+```
+
+这句记录开始时间。
+
+前端类比：
+
+```ts
+const startedAt = performance.now()
+```
+
+后面这句：
+
+```python
+elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+```
+
+意思是：
+
+1. 再调用一次 `time.perf_counter()` 拿到当前时间。
+2. 当前时间减去开始时间，得到耗时，单位是秒。
+3. 乘以 `1000`，变成毫秒。
+4. `int(...)` 转成整数。
+
+前端类比：
+
+```ts
+const elapsedMs = Math.floor((performance.now() - startedAt))
+```
+
+这里为什么要算耗时？
+
+因为原型图底部有类似：
+
+```txt
+耗时0.6s Token:342
+```
+
+我们现在先模拟这个字段，后面前端就可以直接显示。
+
+#### if ... not in ... 是什么
+
+```python
+if "经营单元" not in question and "完成率" not in question:
+    content = "我先按经营单元收入与完成率分析场景返回一份演示数据，后续可以继续扩展问题分类。"
+```
+
+这句的意思是：
+
+```txt
+如果用户问题里不包含“经营单元”，并且也不包含“完成率”，就换一段更通用的回复文案。
+```
+
+`in` 表示“是否包含”。
+
+前端类比：
+
+```ts
+if (!question.includes("经营单元") && !question.includes("完成率")) {
+  content = "我先按经营单元收入与完成率分析场景返回一份演示数据，后续可以继续扩展问题分类。"
+}
+```
+
+#### max(elapsed_ms, 1) 是什么
+
+```python
+"elapsed_ms": max(elapsed_ms, 1),
+```
+
+意思是：
+
+```txt
+elapsed_ms 和 1 之间取更大的那个
+```
+
+为什么要这样？
+
+因为 mock 函数执行太快了，有可能耗时是 `0ms`。
+
+为了页面展示不奇怪，我们至少返回 `1ms`。
+
+前端类比：
+
+```ts
+elapsed_ms: Math.max(elapsedMs, 1)
+```
+
+#### len(question) + len(content) 是什么
+
+```python
+"token_count": len(question) + len(content),
+```
+
+这里不是严格真实的 token 计算，只是 demo 里模拟一个 token 数。
+
+`len(question)` 表示问题字符串长度。
+
+`len(content)` 表示回答字符串长度。
+
+前端类比：
+
+```ts
+token_count: question.length + content.length
+```
+
+真实接大模型时，token 通常由模型服务返回；现在只是为了让页面先有数据可以展示。
+
+为什么函数名前面有一个 `_`：
+
+- `_build_business_target_answer` 前面的 `_` 表示“这个函数主要给当前文件内部使用”。
+- Python 不会强制禁止外部调用它，但这是一个约定。
+- 前端里类似你不会导出一个内部 helper，只导出真正给外面用的函数。
+
+本轮验收标准：
+
+1. 文件 `backend/app/services/mock_ai.py` 创建完成。
+2. 执行下面命令不报错：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m compileall app
+```
+
+如果这一步通过，把终端结果发给我，我们再继续写 `routers/chat.py`。
+
+### 16.2 创建会话接口文件
+
+现在开始写：
+
+```txt
+backend/app/routers/chat.py
+```
+
+这一轮只创建这个文件，并执行语法检查。
+
+先不要改 `main.py`，也先不要去 Swagger 测试。
+
+原因：
+
+- `chat.py` 是接口文件，负责定义“有哪些 HTTP 接口”。
+- `main.py` 是应用入口，负责把接口文件挂载到 FastAPI 应用里。
+- 先写接口文件并确认语法正确，下一步再挂载，问题更容易定位。
+
+前端类比：
+
+- `chat.py` 类似你写一个 `api/chat.ts` 或一个页面路由模块。
+- `main.py` 类似统一的路由入口，比如把页面放进 `router.tsx`。
+- 文件写好了不代表页面已经能访问，还需要挂载。
+
+### 16.2.1 创建文件
+
+创建文件：
+
+```txt
+backend/app/routers/chat.py
+```
+
+写入：
+
+```python
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session, selectinload
+
+from app.db.session import get_db
+from app.models.chat import ChatMessage, ChatSession
+from app.schemas.chat import ChatMessageCreate, ChatSessionCreate, ChatSessionRead
+from app.services.mock_ai import generate_mock_answer
+
+import app.models
+
+
+router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+
+def _get_session_with_messages(db: Session, session_id: int) -> ChatSession | None:
+    return (
+        db.query(ChatSession)
+        .options(selectinload(ChatSession.messages))
+        .filter(ChatSession.id == session_id)
+        .first()
+    )
+
+
+@router.post("", response_model=ChatSessionRead)
+def create_session(payload: ChatSessionCreate, db: Session = Depends(get_db)):
+    session = ChatSession(title=payload.title)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+@router.get("", response_model=list[ChatSessionRead])
+def list_sessions(db: Session = Depends(get_db)):
+    return (
+        db.query(ChatSession)
+        .options(selectinload(ChatSession.messages))
+        .order_by(ChatSession.updated_at.desc())
+        .all()
+    )
+
+
+@router.get("/{session_id}", response_model=ChatSessionRead)
+def get_session(session_id: int, db: Session = Depends(get_db)):
+    session = _get_session_with_messages(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return session
+
+
+@router.post("/{session_id}/messages", response_model=ChatSessionRead)
+def send_message(
+    session_id: int,
+    payload: ChatMessageCreate,
+    db: Session = Depends(get_db),
+):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    if payload.role != "user":
+        raise HTTPException(status_code=400, detail="only user messages can be sent")
+
+    user_message = ChatMessage(
+        session_id=session.id,
+        role="user",
+        content=payload.content,
+    )
+
+    mock_result = generate_mock_answer(payload.content)
+    assistant_message = ChatMessage(
+        session_id=session.id,
+        role="assistant",
+        content=mock_result["content"],
+        answer_data=mock_result["answer_data"],
+        elapsed_ms=mock_result["elapsed_ms"],
+        token_count=mock_result["token_count"],
+    )
+
+    session.updated_at = datetime.now(timezone.utc)
+
+    db.add_all([user_message, assistant_message])
+    db.commit()
+
+    updated_session = _get_session_with_messages(db, session.id)
+    if updated_session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return updated_session
+```
+
+### 16.2.2 这段代码整体在做什么
+
+这个文件提供 4 个接口：
+
+```txt
+POST /api/sessions
+GET /api/sessions
+GET /api/sessions/{session_id}
+POST /api/sessions/{session_id}/messages
+```
+
+对应页面行为：
+
+- `POST /api/sessions`：点击「开启新对话」。
+- `GET /api/sessions`：左侧「近30天记录」列表。
+- `GET /api/sessions/{session_id}`：点开某一条历史会话。
+- `POST /api/sessions/{session_id}/messages`：用户输入问题并发送。
+
+一次发送问题时，后端会做这些事：
+
+1. 查找这条会话是否存在。
+2. 保存一条用户消息，`role="user"`。
+3. 调用 `generate_mock_answer()` 生成模拟 AI 回复。
+4. 保存一条 AI 消息，`role="assistant"`。
+5. 更新会话的 `updated_at`。
+6. 返回完整会话和消息列表。
+
+### 16.2.3 import 部分解释
+
+```python
+from datetime import datetime, timezone
+```
+
+导入时间相关工具。
+
+后面会用：
+
+```python
+datetime.now(timezone.utc)
+```
+
+生成当前 UTC 时间，用来更新会话的 `updated_at`。
+
+前端类比：
+
+```ts
+new Date()
+```
+
+区别是这里明确用了 `timezone.utc`，表示 UTC 时区。
+
+```python
+from fastapi import APIRouter, Depends, HTTPException
+```
+
+这里导入 FastAPI 的 3 个核心工具：
+
+- `APIRouter`：创建一组接口。
+- `Depends`：声明依赖，比如“这个接口需要数据库连接”。
+- `HTTPException`：主动返回 HTTP 错误，比如 404、400。
+
+前端类比：
+
+- `APIRouter` 像一个路由模块。
+- `Depends(get_db)` 像“调用接口前先准备好 db 实例”。
+- `HTTPException` 像你在接口里 `return res.status(404).json(...)`。
+
+```python
+from sqlalchemy.orm import Session, selectinload
+```
+
+这里导入 SQLAlchemy ORM 的工具：
+
+- `Session`：数据库会话，可以理解成一次数据库操作上下文。
+- `selectinload`：查询会话时，顺便把它下面的消息列表也查出来。
+
+前端类比：
+
+- `Session` 有点像你封装好的 `request` 客户端，但它面向数据库。
+- `selectinload` 有点像接口返回详情时顺便 include 子数据。
+
+```python
+from app.db.session import get_db
+```
+
+`get_db` 是我们之前写的数据库依赖。
+
+接口函数里写：
+
+```python
+db: Session = Depends(get_db)
+```
+
+FastAPI 就会自动帮你拿到一个数据库连接。
+
+```python
+from app.models.chat import ChatMessage, ChatSession
+```
+
+导入数据库模型。
+
+前端类比：
+
+- `ChatSession` 像会话表的 ORM 版本。
+- `ChatMessage` 像消息表的 ORM 版本。
+- 你操作它们，就相当于操作数据库表。
+
+```python
+from app.schemas.chat import ChatMessageCreate, ChatSessionCreate, ChatSessionRead
+```
+
+导入接口入参和出参结构。
+
+前端类比：
+
+```ts
+type ChatSessionCreate = {
+  title: string
+}
+
+type ChatMessageCreate = {
+  role: string
+  content: string
+}
+```
+
+```python
+from app.services.mock_ai import generate_mock_answer
+```
+
+导入上一步写好的模拟 AI 函数。
+
+`chat.py` 不自己生成答案，而是调用 service 层。
+
+这样分层更清晰：
+
+```txt
+router 负责接口
+service 负责业务逻辑
+model 负责数据库表
+schema 负责请求/响应格式
+```
+
+```python
+import app.models
+```
+
+这句的作用是确保 `app.models.__init__.py` 被执行，让模型都注册到 SQLAlchemy。
+
+你之前遇到的外键找不到表问题，本质上就是模型没有完整注册。
+
+### 16.2.4 router 是什么
+
+```python
+router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+```
+
+这句创建一个接口分组。
+
+`prefix="/api/sessions"` 表示这个文件里的接口都以 `/api/sessions` 开头。
+
+比如：
+
+```python
+@router.post("")
+```
+
+最终路径就是：
+
+```txt
+POST /api/sessions
+```
+
+再比如：
+
+```python
+@router.post("/{session_id}/messages")
+```
+
+最终路径就是：
+
+```txt
+POST /api/sessions/{session_id}/messages
+```
+
+`tags=["sessions"]` 是 Swagger 文档里的分组名称。
+
+### 16.2.5 _get_session_with_messages 是什么
+
+```python
+def _get_session_with_messages(db: Session, session_id: int) -> ChatSession | None:
+```
+
+这是一个内部辅助函数。
+
+前面的 `_` 表示这个函数主要给当前文件内部使用。
+
+它接收两个参数：
+
+- `db`：数据库会话。
+- `session_id`：要查询的会话 id。
+
+返回值：
+
+```python
+ChatSession | None
+```
+
+意思是：
+
+- 找到了，就返回 `ChatSession`。
+- 没找到，就返回 `None`。
+
+前端类比：
+
+```ts
+function getSessionWithMessages(id: number): ChatSession | null {
+}
+```
+
+这一段：
+
+```python
+return (
+    db.query(ChatSession)
+    .options(selectinload(ChatSession.messages))
+    .filter(ChatSession.id == session_id)
+    .first()
+)
+```
+
+可以拆开理解：
+
+```python
+db.query(ChatSession)
+```
+
+表示从 `chat_sessions` 表开始查询。
+
+```python
+.options(selectinload(ChatSession.messages))
+```
+
+表示顺便加载这条会话下面的 `messages`。
+
+```python
+.filter(ChatSession.id == session_id)
+```
+
+表示只要 id 等于传入 `session_id` 的那条。
+
+```python
+.first()
+```
+
+表示取第一条结果；如果没有结果，就返回 `None`。
+
+前端类比：
+
+```ts
+const session = sessions.find(item => item.id === sessionId)
+```
+
+只是这里查的是数据库，不是前端数组。
+
+### 16.2.6 创建会话接口
+
+```python
+@router.post("", response_model=ChatSessionRead)
+def create_session(payload: ChatSessionCreate, db: Session = Depends(get_db)):
+```
+
+这一段定义：
+
+```txt
+POST /api/sessions
+```
+
+`payload: ChatSessionCreate` 表示请求 body 的结构。
+
+也就是前端要传：
+
+```json
+{
+  "title": "经营单元收入&完成率分析"
+}
+```
+
+`response_model=ChatSessionRead` 表示响应结构。
+
+FastAPI 会按 `ChatSessionRead` 的格式返回数据。
+
+这一句：
+
+```python
+session = ChatSession(title=payload.title)
+```
+
+创建一条会话对象。
+
+它还没有真正保存到数据库，只是在 Python 内存里创建了一个对象。
+
+```python
+db.add(session)
+```
+
+把对象加入数据库会话，意思是“准备保存”。
+
+```python
+db.commit()
+```
+
+真正提交到数据库。
+
+前端类比：
+
+```ts
+await request.post("/api/sessions", data)
+```
+
+但后端这里是更底层的数据库保存。
+
+```python
+db.refresh(session)
+```
+
+提交后，数据库会生成 `id`、`created_at`、`updated_at`。
+
+`refresh` 的作用是把数据库生成的新值同步回 Python 对象。
+
+如果不 `refresh`，你可能拿不到最新的 `id` 或时间字段。
+
+### 16.2.7 查询会话列表接口
+
+```python
+@router.get("", response_model=list[ChatSessionRead])
+def list_sessions(db: Session = Depends(get_db)):
+```
+
+这一段定义：
+
+```txt
+GET /api/sessions
+```
+
+返回值是：
+
+```python
+list[ChatSessionRead]
+```
+
+意思是返回一个数组，数组里每一项都是 `ChatSessionRead`。
+
+前端类比：
+
+```ts
+Promise<ChatSessionRead[]>
+```
+
+查询部分：
+
+```python
+db.query(ChatSession)
+.options(selectinload(ChatSession.messages))
+.order_by(ChatSession.updated_at.desc())
+.all()
+```
+
+拆开看：
+
+- `db.query(ChatSession)`：查询会话表。
+- `selectinload(ChatSession.messages)`：顺便加载消息。
+- `order_by(ChatSession.updated_at.desc())`：按更新时间倒序排列。
+- `.all()`：返回所有结果。
+
+`desc()` 是 descending 的缩写，表示倒序。
+
+前端类比：
+
+```ts
+sessions.sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+```
+
+为什么按 `updated_at` 倒序？
+
+因为左侧「近30天记录」通常要把最近对话排在最上面。
+
+### 16.2.8 查询会话详情接口
+
+```python
+@router.get("/{session_id}", response_model=ChatSessionRead)
+def get_session(session_id: int, db: Session = Depends(get_db)):
+```
+
+这一段定义：
+
+```txt
+GET /api/sessions/1
+```
+
+`{session_id}` 是路径参数。
+
+前端类比：
+
+```txt
+/api/sessions/:sessionId
+```
+
+FastAPI 会自动把 URL 里的 `1` 传给函数参数：
+
+```python
+session_id: int
+```
+
+然后查询：
+
+```python
+session = _get_session_with_messages(db, session_id)
+```
+
+如果没查到：
+
+```python
+if session is None:
+    raise HTTPException(status_code=404, detail="session not found")
+```
+
+这会让接口返回 404。
+
+前端类比：
+
+```ts
+if (!session) {
+  throw new Response("session not found", { status: 404 })
+}
+```
+
+### 16.2.9 发送消息接口
+
+```python
+@router.post("/{session_id}/messages", response_model=ChatSessionRead)
+def send_message(
+    session_id: int,
+    payload: ChatMessageCreate,
+    db: Session = Depends(get_db),
+):
+```
+
+这一段定义：
+
+```txt
+POST /api/sessions/1/messages
+```
+
+它同时接收：
+
+- URL 里的 `session_id`。
+- body 里的 `payload`。
+- FastAPI 注入的数据库连接 `db`。
+
+请求 body 长这样：
+
+```json
+{
+  "role": "user",
+  "content": "经营单元收入&完成率分析"
+}
+```
+
+先查会话：
+
+```python
+session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+```
+
+如果会话不存在，返回 404。
+
+再判断：
+
+```python
+if payload.role != "user":
+    raise HTTPException(status_code=400, detail="only user messages can be sent")
+```
+
+为什么只允许 `user`？
+
+因为这个接口是“用户发送问题”。
+
+AI 回复应该由后端生成，前端不能自己传一个 `assistant` 消息进来。
+
+接着创建用户消息：
+
+```python
+user_message = ChatMessage(
+    session_id=session.id,
+    role="user",
+    content=payload.content,
+)
+```
+
+这条消息还没有保存，只是在内存里创建了一个 ORM 对象。
+
+然后调用模拟 AI：
+
+```python
+mock_result = generate_mock_answer(payload.content)
+```
+
+`mock_result` 大概长这样：
+
+```python
+{
+    "content": "已生成经营单元收入与完成率分析，包含数据表格、统计结果和目标对比图。",
+    "answer_data": {...},
+    "elapsed_ms": 1,
+    "token_count": 50,
+}
+```
+
+再创建 AI 消息：
+
+```python
+assistant_message = ChatMessage(
+    session_id=session.id,
+    role="assistant",
+    content=mock_result["content"],
+    answer_data=mock_result["answer_data"],
+    elapsed_ms=mock_result["elapsed_ms"],
+    token_count=mock_result["token_count"],
+)
+```
+
+注意这里的取值方式：
+
+```python
+mock_result["content"]
+```
+
+因为 `mock_result` 是 Python 字典。
+
+前端类比：
+
+```ts
+mockResult.content
+```
+
+更新会话时间：
+
+```python
+session.updated_at = datetime.now(timezone.utc)
+```
+
+这样左侧会话列表排序时，这条会话会排到前面。
+
+保存两条消息：
+
+```python
+db.add_all([user_message, assistant_message])
+db.commit()
+```
+
+`add_all` 表示一次加入多个对象。
+
+前端类比：
+
+```ts
+messages.push(userMessage, assistantMessage)
+```
+
+只是这里最终会保存到数据库。
+
+提交后重新查询：
+
+```python
+updated_session = _get_session_with_messages(db, session.id)
+```
+
+为什么要重新查询？
+
+因为我们希望返回给前端的是完整会话，包括刚刚新增的两条消息。
+
+### 16.2.10 本轮验收标准
+
+这一轮只验证 Python 语法，不测试接口。
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+python -m compileall app
+```
+
+如果没有报错，就把终端结果发给我。
+
+下一轮我们再修改：
+
+```txt
+backend/app/main.py
+```
+
+把 `chat.router` 挂载到 FastAPI 应用里，然后去 Swagger 测试接口。
+
+本轮你现在只做：
+
+1. 创建 `backend/app/routers/chat.py`。
+2. 把 16.2.1 的代码写进去。
+3. 执行 `python -m compileall app`。
+4. 把终端结果发给我。
+
+### 16.2.11 验收结果
+
+已完成：
+
+- `backend/app/routers/chat.py` 已创建。
+- 语法检查通过。
+- `chat.py` 还没有挂载到 `main.py`。
+- Swagger 里暂时还看不到 `/api/sessions`，这是正常的。
+
+下一步：
+
+```txt
+第 16.3：在 main.py 挂载 chat router
+```
+
+回家后从这里继续，不要直接跳到前端。

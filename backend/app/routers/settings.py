@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.setting import AppSetting
+from app.models import AppSetting
 from app.schemas.setting import AppSettingRead, AppSettingUpdate
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])

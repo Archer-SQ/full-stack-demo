@@ -6,5 +6,5 @@ load_dotenv()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgressql+psycopg://archer:123456@localhost:5432/fullstack_demo",
+    "postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo",
 )

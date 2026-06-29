@@ -1,20 +1,20 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
-class FeedbackBasic(BaseModel):
+class FeedbackBase(BaseModel):
     user_name: str
     question: str
     ai_answer: str
     message_id: int | None = None
 
 
-class FeedbackCreate(FeedbackBasic):
+class FeedbackCreate(FeedbackBase):
     pass
 
 
-class FeedbackRead(FeedbackBasic):
+class FeedbackRead(FeedbackBase):
     id: int
     status: str
     remark: str | None = None
@@ -27,3 +27,10 @@ class FeedbackRead(FeedbackBasic):
 class FeedbackUpdate(BaseModel):
     status: str | None = None
     remark: str | None = None
+
+
+class FeedbackListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[FeedbackRead] = Field(default_factory=list)
