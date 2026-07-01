@@ -1,0 +1,387 @@
+.table-card {
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+  overflow: hidden;
+}
+
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 54px;
+  border-bottom: 1px solid #e4e9f2;
+  padding: 0 18px;
+  color: #667085;
+}
+
+.table-toolbar strong {
+  color: #111827;
+}
+
+.table-count {
+  color: #8a94a6;
+  font-size: 14px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table-wrap::-webkit-scrollbar {
+  height: 8px;
+}
+
+.table-wrap::-webkit-scrollbar-track {
+  background: #f5f7fb;
+}
+
+.table-wrap::-webkit-scrollbar-thumb {
+  background: #cfd7e6;
+  border-radius: 999px;
+}
+
+.data-table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 15px;
+}
+
+.data-table th {
+  height: 48px;
+  background: #f7f9fc;
+  color: #475467;
+  font-weight: 600;
+  text-align: left;
+  padding: 0 16px;
+  border-bottom: 1px solid #e4e9f2;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.data-table td {
+  height: 52px;
+  color: #344054;
+  padding: 0 16px;
+  border-bottom: 1px solid #eef2f7;
+  vertical-align: middle;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table tbody tr:hover {
+  background: #f8faff;
+}
+
+.feedback-col-index {
+  width: 76px;
+}
+
+.feedback-col-user {
+  width: 140px;
+}
+
+.feedback-col-question {
+  width: auto;
+}
+
+.feedback-col-time {
+  width: 220px;
+}
+
+.feedback-col-status {
+  width: 120px;
+}
+
+.table-index,
+.table-status {
+  text-align: center;
+}
+
+.table-user {
+  color: #172033;
+  font-weight: 500;
+}
+
+.table-question {
+  overflow: hidden;
+  color: #344054;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-date {
+  color: #667085;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.status-tag.pending {
+  background: #fff7e6;
+  color: #d97706;
+}
+
+.status-tag.resolved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.empty-cell {
+  height: 180px;
+  color: #98a2b3;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .table-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    padding: 12px 16px;
+  }
+}
+
+.feedback-col-action {
+  width: 120px;
+}
+
+.table-action {
+  text-align: center;
+}
+
+.table-action button {
+  border: 0;
+  border-radius: 6px;
+  background: #eef3ff;
+  color: #2563eb;
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.table-action button:hover {
+  background: #dbeafe;
+}
+
+.table-action button:disabled {
+  cursor: not-allowed;
+  background: #eef2f7;
+  color: #98a2b3;
+}
+
+.feedback-modal-body {
+  display: grid;
+  gap: 14px;
+}
+
+.feedback-modal-body label {
+  display: grid;
+  gap: 8px;
+  color: #475467;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.feedback-modal-body p {
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #344054;
+  padding: 10px 12px;
+  font-weight: 400;
+  line-height: 1.7;
+}
+
+.feedback-modal-body textarea {
+  min-height: 110px;
+  resize: vertical;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  color: #172033;
+  padding: 10px 12px;
+  font: inherit;
+  outline: 0;
+}
+
+.feedback-modal-body textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 12%);
+}
+
+.feedback-panel-header {
+  border-bottom: 1px solid #e4e9f2;
+  padding: 14px 18px 12px;
+}
+
+.feedback-panel-header > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.feedback-panel-header strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.feedback-panel-header span {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.feedback-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feedback-filters input,
+.feedback-filters select {
+  height: 32px;
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  background: #fff;
+  color: #344054;
+  padding: 0 10px;
+  outline: 0;
+}
+
+.feedback-filters input {
+  width: 180px;
+}
+
+.feedback-filters select {
+  width: 120px;
+}
+
+.feedback-filters .table-count {
+  margin-left: auto;
+}
+
+.feedback-col-action {
+  width: 120px;
+}
+
+.table-action {
+  position: sticky;
+  right: 0;
+  background: #fff;
+  text-align: center;
+  box-shadow: -2px 0 4px rgb(15 23 42 / 4%);
+}
+
+.table-action button {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.feedback-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 12px 18px 16px;
+  color: #8a94a6;
+  font-size: 14px;
+}
+
+.feedback-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feedback-pagination button {
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  background: #fff;
+  color: #475467;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.feedback-pagination button:disabled {
+  cursor: not-allowed;
+  color: #b8c0cc;
+  background: #f5f7fb;
+}
+
+.feedback-modal-body.two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 20px;
+}
+
+.feedback-preview,
+.feedback-form {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.feedback-modal-body label {
+  display: grid;
+  gap: 6px;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.feedback-modal-body p {
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #374151;
+  padding: 10px 12px;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.feedback-modal-body p.ai-reply {
+  border: 1px solid #fde68a;
+  background: #fff8f0;
+  color: #92400e;
+}
+
+.feedback-modal-body select,
+.feedback-modal-body textarea {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fafbfc;
+  color: #344054;
+  font: inherit;
+  outline: 0;
+}
+
+.feedback-modal-body select {
+  height: 36px;
+  padding: 0 10px;
+}
+
+.feedback-modal-body textarea {
+  height: 180px;
+  resize: vertical;
+  padding: 10px;
+}

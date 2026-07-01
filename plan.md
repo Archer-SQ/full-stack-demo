@@ -7401,3 +7401,6031 @@ Unexpected token
 2. 同时启动后端和前端。
 3. 打开页面检查配置列表。
 4. 把页面截图或报错发给我。
+
+### 18.8 验收结果
+
+已完成：
+
+- 页面能正常显示 `/api/settings` 返回的配置列表。
+- 浏览器 Network 里能看到 `/api/settings` 请求状态是 `200`。
+- 说明这条链路已经通了：
+
+```txt
+React
+  -> Vite proxy
+  -> FastAPI
+  -> PostgreSQL
+```
+
+注意：
+
+- 开发环境下 Network 里可能看到两次 `/api/settings`。
+- 这是 React `StrictMode` 在开发环境中重复执行 effect，用来检查副作用是否安全。
+- 当前是只读 GET 请求，所以重复一次不会破坏数据。
+
+## 第 19 步：在前端调用 `PATCH /api/settings/{code}`，验证写操作
+
+第 18 步验证的是读取数据：
+
+```txt
+GET /api/settings
+```
+
+第 19 步要验证修改数据：
+
+```txt
+PATCH /api/settings/{code}
+```
+
+这一轮仍然不是做正式页面。
+
+本轮目标只是：
+
+```txt
+点击页面上的开关按钮
+  -> 前端调用 updateSetting()
+  -> Vite proxy 转发到 FastAPI
+  -> FastAPI 修改 PostgreSQL
+  -> 前端页面显示最新状态
+```
+
+为什么现在要做这一步：
+
+- 第 18 步只证明前端能读后端数据。
+- 面试任务里“应用配置”页面有开关，所以必须证明前端也能写后端数据。
+- 读写都跑通后，再做正式页面会稳很多。
+
+前端类比：
+
+- `GET /api/settings` 像进入页面时拉列表。
+- `PATCH /api/settings/{code}` 像点击开关后更新某一条配置。
+- `settings.map(...)` 替换某一项，类似前端列表状态里的局部更新。
+
+### 19.1 修改 `frontend/src/App.tsx`
+
+打开：
+
+```txt
+frontend/src/App.tsx
+```
+
+把这一行：
+
+```tsx
+import { getSettings } from './api/settings'
+```
+
+改成：
+
+```tsx
+import { getSettings, updateSetting } from './api/settings'
+```
+
+然后在已有状态下面增加：
+
+```tsx
+const [updatingCode, setUpdatingCode] = useState<string | null>(null)
+```
+
+完整状态区域大概是：
+
+```tsx
+const [settings, setSettings] = useState<AppSetting[]>([])
+const [loading, setLoading] = useState(true)
+const [error, setError] = useState<string | null>(null)
+const [updatingCode, setUpdatingCode] = useState<string | null>(null)
+```
+
+这里的 `updatingCode` 用来记录“当前哪一个配置正在提交更新”。
+
+比如你点击了 `tts`，那：
+
+```txt
+updatingCode = "tts"
+```
+
+前端就可以只禁用 `tts` 这一项的按钮，避免用户连续点很多次。
+
+前端类比：
+
+```tsx
+const [loadingId, setLoadingId] = useState<string | null>(null)
+```
+
+### 19.2 增加切换函数
+
+在 `useEffect` 下面、`return` 上面增加：
+
+```tsx
+  const handleToggle = async (item: AppSetting) => {
+    setUpdatingCode(item.code)
+    setError(null)
+
+    try {
+      const updated = await updateSetting(item.code, {
+        enabled: !item.enabled,
+        config: item.config,
+      })
+
+      setSettings(currentSettings =>
+        currentSettings.map(current =>
+          current.code === updated.code ? updated : current,
+        ),
+      )
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '更新失败')
+    } finally {
+      setUpdatingCode(null)
+    }
+  }
+```
+
+这段代码的流程是：
+
+1. 记录当前正在更新哪一项。
+2. 清掉旧错误。
+3. 调用 `updateSetting(...)`。
+4. 后端返回更新后的配置。
+5. 用返回的新配置替换前端列表里的旧配置。
+6. 不管成功失败，都清掉 `updatingCode`。
+
+### 19.3 `async / await` 是什么
+
+```tsx
+const handleToggle = async (item: AppSetting) => {
+```
+
+`async` 表示这个函数里面可以使用 `await`。
+
+```tsx
+const updated = await updateSetting(...)
+```
+
+`await` 的意思是：
+
+```txt
+等 updateSetting 请求完成，再继续执行后面的代码。
+```
+
+前端类比你应该熟悉：
+
+```tsx
+fetch(...).then(...)
+```
+
+和：
+
+```tsx
+const data = await fetch(...)
+```
+
+本质都是处理异步请求。
+
+这里用 `async / await` 是因为点击按钮的流程有成功、失败、最终收尾，用 `try / catch / finally` 更清楚。
+
+### 19.4 为什么 payload 里要传 `config`
+
+调用接口时写的是：
+
+```tsx
+const updated = await updateSetting(item.code, {
+  enabled: !item.enabled,
+  config: item.config,
+})
+```
+
+`enabled: !item.enabled` 表示把当前开关状态反过来。
+
+如果现在是：
+
+```txt
+enabled = true
+```
+
+点击后就传：
+
+```txt
+enabled = false
+```
+
+如果现在是：
+
+```txt
+enabled = false
+```
+
+点击后就传：
+
+```txt
+enabled = true
+```
+
+`config: item.config` 表示配置内容保持不变。
+
+后端的 `PATCH` Schema 是：
+
+```python
+class AppSettingUpdate(BaseModel):
+    enabled: bool | None = None
+    config: dict[str, Any] | None = None
+```
+
+其实只传 `enabled` 也可以，因为后端只有在 `config is not None` 时才更新 config。
+
+但是当前前端 API 函数定义是：
+
+```ts
+payload: Pick<AppSetting, "enabled" | "config">
+```
+
+所以现在先按类型要求同时传 `enabled` 和 `config`。
+
+后面如果想更优雅，可以把类型改成：
+
+```ts
+Partial<Pick<AppSetting, "enabled" | "config">>
+```
+
+这样就允许只传：
+
+```tsx
+{ enabled: !item.enabled }
+```
+
+但这不是本轮重点，先不改。
+
+### 19.5 为什么要用 `settings.map(...)`
+
+更新成功后：
+
+```tsx
+setSettings(currentSettings =>
+  currentSettings.map(current =>
+    current.code === updated.code ? updated : current,
+  ),
+)
+```
+
+意思是：
+
+```txt
+遍历当前 settings 列表
+如果这一项 code 等于后端返回的 updated.code，就替换成 updated
+否则保持原来的 current
+```
+
+前端类比：
+
+```tsx
+const nextSettings = settings.map(item => {
+  if (item.code === updated.code) {
+    return updated
+  }
+
+  return item
+})
+```
+
+为什么不直接重新请求 `getSettings()`？
+
+两种方式都可以。
+
+现在用局部替换，是因为：
+
+- 后端已经返回了更新后的那条数据。
+- 没必要为了一个开关再请求整个列表。
+- 页面响应会更快。
+
+但是正式业务里，如果列表数据很复杂，也可以选择更新成功后重新拉一遍列表，确保和后端完全一致。
+
+### 19.6 修改按钮显示
+
+在 `settings.map(...)` 里面，把原来的：
+
+```tsx
+<span className={item.enabled ? 'badge enabled' : 'badge disabled'}>
+  {item.enabled ? '已开启' : '已关闭'}
+</span>
+```
+
+改成：
+
+```tsx
+<button
+  className={item.enabled ? 'toggle enabled' : 'toggle disabled'}
+  disabled={updatingCode === item.code}
+  onClick={() => handleToggle(item)}
+>
+  {updatingCode === item.code
+    ? '更新中...'
+    : item.enabled
+      ? '已开启'
+      : '已关闭'}
+</button>
+```
+
+这里的：
+
+```tsx
+onClick={() => handleToggle(item)}
+```
+
+表示点击按钮时，把当前这一项配置传给 `handleToggle`。
+
+不要写成：
+
+```tsx
+onClick={handleToggle(item)}
+```
+
+因为这样会在渲染时立刻执行函数，而不是点击时再执行。
+
+前端类比：
+
+```tsx
+onClick={() => doSomething(id)}
+```
+
+这是 React 里给事件函数传参数的常见写法。
+
+### 19.7 修改 `frontend/src/App.css`
+
+把原来的 `.badge`、`.badge.enabled`、`.badge.disabled` 可以先保留。
+
+在下面追加：
+
+```css
+.toggle {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.toggle.enabled {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.toggle.disabled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+```
+
+### 19.8 验收方式
+
+确认后端和前端都在运行。
+
+浏览器打开：
+
+```txt
+http://127.0.0.1:5173
+```
+
+点击任意一个配置开关，比如：
+
+```txt
+文字转语音
+```
+
+预期结果：
+
+1. 按钮短暂显示 `更新中...`。
+2. 状态从 `已关闭` 变成 `已开启`，或者反过来。
+3. 浏览器 Network 里能看到：
+
+```txt
+PATCH /api/settings/tts
+```
+
+4. 这个请求状态是 `200`。
+5. 刷新页面后，开关状态仍然保持刚才更新后的结果。
+
+刷新后还能保持，说明不是只改了前端状态，而是真的写进 PostgreSQL 了。
+
+### 19.9 本轮验收标准
+
+完成第 19 步后，应该满足：
+
+1. 页面仍然能显示配置列表。
+2. 点击开关会调用 `PATCH /api/settings/{code}`。
+3. Network 里 PATCH 请求返回 `200`。
+4. 刷新页面后，状态仍然是更新后的值。
+
+你现在只做：
+
+1. 修改 `frontend/src/App.tsx`。
+2. 修改 `frontend/src/App.css`。
+3. 点击一个开关测试。
+4. 把页面截图和 Network 结果发给我。
+
+### 19.10 验收结果
+
+已完成：
+
+- 页面仍然能显示配置列表。
+- 点击开关后会调用 `PATCH /api/settings/{code}`。
+- Network 里能看到 `PATCH /api/settings/greeting`，状态是 `200`。
+- 页面状态能更新。
+
+这说明前端已经打通了读写闭环：
+
+```txt
+GET /api/settings
+  -> 从 PostgreSQL 读取配置
+
+PATCH /api/settings/{code}
+  -> 写入 PostgreSQL
+```
+
+到这里为止，临时联调页的使命完成了。
+
+## 第 20 步：把临时联调页升级成正式「应用配置」页面第一版
+
+这一页对应原型里的：
+
+```txt
+系统管理 / 应用配置
+```
+
+第 18、19 步只是临时联调页，页面标题还是：
+
+```txt
+前后端联调
+```
+
+第 20 步开始把它整理成正式页面。
+
+但本轮仍然只做一个页面：
+
+```txt
+应用配置页
+```
+
+先不要做：
+
+- 智能问数首页。
+- 回复校对页。
+- 路由系统。
+- 复杂弹窗配置。
+
+原因：
+
+- 你已经验证了 `GET` 和 `PATCH`。
+- 应用配置页正好只依赖 `getSettings()` 和 `updateSetting()`。
+- 先把一个页面做完整，后面再按同样方式做另外两个页面。
+
+### 20.1 安装图标库
+
+正式页面需要图标。
+
+我们不手写 SVG，使用常见的 React 图标库：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm add lucide-react
+```
+
+为什么用 `lucide-react`：
+
+- 它是 React 图标组件库。
+- 用法简单，直接 `import { Bot } from "lucide-react"`。
+- 图标可以像普通 React 组件一样传 `size`、`strokeWidth`。
+- 比手写 SVG 更利于维护。
+
+前端类比：
+
+```tsx
+import { Bot } from "lucide-react"
+
+<Bot size={20} />
+```
+
+就像你使用一个普通组件。
+
+安装后，`package.json` 和 `pnpm-lock.yaml` 会变化，这是正常的。
+
+### 20.2 替换 `frontend/src/App.tsx`
+
+打开：
+
+```txt
+frontend/src/App.tsx
+```
+
+替换为：
+
+```tsx
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Bot,
+  Flame,
+  ListChecks,
+  MessageCircle,
+  Mic,
+  Settings,
+  Volume2,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { getSettings, updateSetting } from './api/settings'
+import type { AppSetting } from './api/types'
+import './App.css'
+
+type SettingMeta = {
+  Icon: LucideIcon
+  tone: 'blue' | 'yellow' | 'green' | 'purple' | 'indigo' | 'orange'
+  configurable: boolean
+}
+
+const settingMetaMap: Record<string, SettingMeta> = {
+  greeting: {
+    Icon: MessageCircle,
+    tone: 'blue',
+    configurable: true,
+  },
+  suggestions: {
+    Icon: ListChecks,
+    tone: 'yellow',
+    configurable: false,
+  },
+  tts: {
+    Icon: Volume2,
+    tone: 'green',
+    configurable: false,
+  },
+  stt: {
+    Icon: Mic,
+    tone: 'purple',
+    configurable: false,
+  },
+  model_config: {
+    Icon: Bot,
+    tone: 'indigo',
+    configurable: true,
+  },
+  hot_recommend: {
+    Icon: Flame,
+    tone: 'orange',
+    configurable: true,
+  },
+}
+
+function App() {
+  const [settings, setSettings] = useState<AppSetting[]>([])
+  const [updatingCode, setUpdatingCode] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getSettings()
+      .then(data => {
+        setSettings(data)
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : '请求失败')
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+  }, [])
+
+  const enabledCount = useMemo(() => {
+    return settings.filter(item => item.enabled).length
+  }, [settings])
+
+  const handleToggle = async (item: AppSetting) => {
+    setUpdatingCode(item.code)
+    setError(null)
+
+    try {
+      const updated = await updateSetting(item.code, {
+        enabled: !item.enabled,
+        config: item.config,
+      })
+
+      setSettings(currentSettings =>
+        currentSettings.map(current => (current.code === updated.code ? updated : current)),
+      )
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '更新失败')
+    } finally {
+      setUpdatingCode(null)
+    }
+  }
+
+  return (
+    <main className="app-page">
+      <div className="page-shell">
+        <nav className="breadcrumb" aria-label="面包屑">
+          <span>系统管理</span>
+          <span>/</span>
+          <strong>应用配置</strong>
+        </nav>
+
+        <header className="page-header">
+          <div>
+            <h1>应用配置</h1>
+            <p>管理智能问数相关能力开关。</p>
+          </div>
+          <div className="summary">
+            <span>{enabledCount}</span>
+            <small>已开启</small>
+          </div>
+        </header>
+
+        {loading && <p className="state-text">加载中...</p>}
+        {error && <p className="state-text error">{error}</p>}
+
+        {!loading && !error && (
+          <section className="settings-grid" aria-label="应用配置列表">
+            {settings.map(item => {
+              const meta = settingMetaMap[item.code] ?? {
+                Icon: Settings,
+                tone: 'blue' as const,
+                configurable: false,
+              }
+              const { Icon } = meta
+
+              return (
+                <article className="setting-card" key={item.code}>
+                  <div className={`setting-icon ${meta.tone}`} aria-hidden="true">
+                    <Icon size={22} strokeWidth={2.2} />
+                  </div>
+
+                  <div className="setting-content">
+                    <div className="setting-title-row">
+                      <h2>{item.name}</h2>
+                      <div className="setting-actions">
+                        {meta.configurable && (
+                          <button
+                            className="icon-button"
+                            type="button"
+                            aria-label={`${item.name}配置`}
+                          >
+                            <Settings size={18} strokeWidth={2.2} />
+                          </button>
+                        )}
+                        <button
+                          className={item.enabled ? 'switch is-on' : 'switch'}
+                          type="button"
+                          role="switch"
+                          aria-checked={item.enabled}
+                          disabled={updatingCode === item.code}
+                          onClick={() => handleToggle(item)}
+                        >
+                          <span />
+                        </button>
+                      </div>
+                    </div>
+                    <p>{item.description}</p>
+                  </div>
+                </article>
+              )
+            })}
+          </section>
+        )}
+      </div>
+    </main>
+  )
+}
+
+export default App
+```
+
+### 20.3 这段 TSX 里新东西解释
+
+#### `LucideIcon` 是什么
+
+```tsx
+import type { LucideIcon } from 'lucide-react'
+```
+
+`LucideIcon` 是图标组件的类型。
+
+因为我们要把图标组件放进配置对象：
+
+```tsx
+const settingMetaMap = {
+  greeting: {
+    Icon: MessageCircle,
+  },
+}
+```
+
+这里的 `Icon` 本质上是一个 React 组件。
+
+所以类型里写：
+
+```tsx
+Icon: LucideIcon
+```
+
+意思是：
+
+```txt
+Icon 这个字段必须是 lucide-react 图标组件。
+```
+
+#### `settingMetaMap` 为什么放在前端
+
+后端返回的是业务数据：
+
+```txt
+code
+name
+description
+enabled
+config
+```
+
+但图标颜色、是否显示齿轮按钮，属于前端展示逻辑。
+
+所以我们在前端写：
+
+```tsx
+const settingMetaMap = {
+  greeting: {
+    Icon: MessageCircle,
+    tone: 'blue',
+    configurable: true,
+  },
+}
+```
+
+不要把这些 UI 展示细节放进数据库。
+
+前端类比：
+
+```tsx
+const statusMap = {
+  pending: { label: '待处理', color: 'orange' },
+  resolved: { label: '已处理', color: 'green' },
+}
+```
+
+#### `useMemo` 是什么
+
+```tsx
+const enabledCount = useMemo(() => {
+  return settings.filter(item => item.enabled).length
+}, [settings])
+```
+
+`enabledCount` 表示当前开启了多少个配置。
+
+不用 `useMemo` 也可以直接写：
+
+```tsx
+const enabledCount = settings.filter(item => item.enabled).length
+```
+
+这里写 `useMemo` 是为了演示一种常见写法：
+
+```txt
+当 settings 没变时，不重复计算 enabledCount。
+```
+
+这个列表很小，性能差异不重要。
+
+你可以先理解成：
+
+```txt
+根据 settings 派生出来的一个值。
+```
+
+#### `role="switch"` 和 `aria-checked`
+
+```tsx
+<button
+  role="switch"
+  aria-checked={item.enabled}
+>
+```
+
+这是无障碍语义。
+
+因为这个按钮不是普通按钮，而是一个开关。
+
+`role="switch"` 告诉浏览器和辅助工具：
+
+```txt
+这是一个开关控件。
+```
+
+`aria-checked={item.enabled}` 告诉它当前是开还是关。
+
+正式项目里，这种细节能体现前端专业度。
+
+#### 为什么齿轮按钮现在没有点击事件
+
+```tsx
+<button className="icon-button" type="button" aria-label={`${item.name}配置`}>
+```
+
+这一轮只做开关。
+
+齿轮按钮先显示出来，匹配原型视觉。
+
+后面如果要做配置弹窗，再给它加 `onClick`。
+
+不要在这一轮把弹窗也做了，否则步骤太大。
+
+### 20.4 替换 `frontend/src/App.css`
+
+打开：
+
+```txt
+frontend/src/App.css
+```
+
+替换为：
+
+```css
+.app-page {
+  min-height: 100vh;
+  background: #f4f6fa;
+  color: #172033;
+  padding: 28px;
+  box-sizing: border-box;
+}
+
+.page-shell {
+  width: 100%;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8a94a6;
+  font-size: 15px;
+  margin-bottom: 22px;
+}
+
+.breadcrumb strong {
+  color: #475467;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.page-header h1 {
+  margin: 0;
+  color: #111827;
+  font-size: 24px;
+}
+
+.page-header p {
+  margin: 6px 0 0;
+  color: #667085;
+}
+
+.summary {
+  min-width: 96px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 14px;
+  text-align: center;
+}
+
+.summary span {
+  display: block;
+  color: #2563eb;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.summary small {
+  color: #667085;
+  font-size: 13px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.setting-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 104px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  padding: 16px 18px;
+  box-sizing: border-box;
+}
+
+.setting-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+
+.setting-icon.blue {
+  background: #e8f0ff;
+  color: #2563eb;
+}
+
+.setting-icon.yellow {
+  background: #fff3cf;
+  color: #d97706;
+}
+
+.setting-icon.green {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.setting-icon.purple {
+  background: #f3e8ff;
+  color: #9333ea;
+}
+
+.setting-icon.indigo {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+
+.setting-icon.orange {
+  background: #ffedd5;
+  color: #ea580c;
+}
+
+.setting-content {
+  min-width: 0;
+}
+
+.setting-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.setting-title-row h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 17px;
+}
+
+.setting-content p {
+  margin: 0;
+  color: #98a2b3;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.setting-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.icon-button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #98a2b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: #f2f4f7;
+  color: #667085;
+}
+
+.switch {
+  width: 38px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: #d8dde6;
+  padding: 2px;
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+
+.switch span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  transform: translateX(0);
+  transition: transform 0.16s ease;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 18%);
+}
+
+.switch.is-on {
+  background: #3152f4;
+}
+
+.switch.is-on span {
+  transform: translateX(16px);
+}
+
+.switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.state-text {
+  color: #667085;
+}
+
+.state-text.error {
+  color: #b42318;
+}
+
+@media (max-width: 1080px) {
+  .settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .app-page {
+    padding: 18px;
+  }
+
+  .page-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+```
+
+### 20.5 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+如果 build 通过，再打开：
+
+```txt
+http://127.0.0.1:5173
+```
+
+检查：
+
+1. 页面标题变成 `应用配置`。
+2. 顶部有 `系统管理 / 应用配置`。
+3. 配置项变成 3 列卡片布局。
+4. 每个卡片有图标、标题、描述、开关。
+5. 点击开关仍然能触发 `PATCH /api/settings/{code}`。
+6. Network 里 PATCH 请求返回 `200`。
+
+### 20.6 本轮验收标准
+
+完成第 20 步后，应该满足：
+
+1. `pnpm build` 通过。
+2. 页面视觉接近原型里的「系统管理 / 应用配置」。
+3. 开关功能仍然能更新数据库。
+
+你现在只做：
+
+1. 执行 `pnpm add lucide-react`。
+2. 替换 `frontend/src/App.tsx`。
+3. 替换 `frontend/src/App.css`。
+4. 执行 `pnpm build`。
+5. 打开页面测试一个开关。
+6. 把页面截图和构建结果发给我。
+
+### 20.7 验收结果
+
+已完成：
+
+- `lucide-react` 已安装。
+- 页面已经变成正式「系统管理 / 应用配置」样式。
+- `pnpm build` 通过。
+- 开关仍然能调用 `PATCH /api/settings/{code}`。
+
+当前 `App.tsx` 里还放着完整应用配置页代码。
+
+这在只有一个页面时没问题，但后面还要做：
+
+- 智能问数页。
+- 回复校对页。
+
+所以下一步要先整理前端结构。
+
+## 第 21 步：接入 React Router，并把应用配置页拆成独立页面组件
+
+这一轮不新增业务功能。
+
+目标是整理前端结构：
+
+```txt
+App.tsx
+  -> 只负责路由入口
+
+pages/AppConfigPage.tsx
+  -> 放应用配置页代码
+```
+
+为什么要做这一步：
+
+- 后面有 3 个页面，不能一直把所有页面都写在 `App.tsx`。
+- `App.tsx` 应该像项目入口，负责路由和整体框架。
+- 每个页面应该放到 `pages/` 里，方便后面维护。
+
+前端类比：
+
+```txt
+App.tsx 像 routes.tsx
+pages/AppConfigPage.tsx 像一个真正的页面组件
+```
+
+这一轮只接一个路由：
+
+```txt
+/settings
+```
+
+先不要做：
+
+- `/feedbacks`
+- `/chat`
+- 侧边栏导航
+- 正式菜单系统
+
+### 21.1 安装 React Router
+
+在前端目录执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm add react-router-dom
+```
+
+为什么需要它：
+
+- 现在只有一个页面，直接渲染 `App` 可以。
+- 后面有多个页面，需要根据 URL 显示不同页面。
+- `react-router-dom` 是 React 项目里常见的路由库。
+
+安装后，`package.json` 和 `pnpm-lock.yaml` 会变化，这是正常的。
+
+### 21.2 创建页面目录
+
+创建目录：
+
+```txt
+frontend/src/pages
+```
+
+然后创建文件：
+
+```txt
+frontend/src/pages/AppConfigPage.tsx
+```
+
+### 21.3 把应用配置页代码移到 `AppConfigPage.tsx`
+
+把当前 `frontend/src/App.tsx` 里的页面代码移动到：
+
+```txt
+frontend/src/pages/AppConfigPage.tsx
+```
+
+注意导入路径要改。
+
+原来在 `App.tsx` 里：
+
+```tsx
+import { getSettings, updateSetting } from './api/settings'
+import type { AppSetting } from './api/types'
+```
+
+移动到 `pages/AppConfigPage.tsx` 后，要改成：
+
+```tsx
+import { getSettings, updateSetting } from '../api/settings'
+import type { AppSetting } from '../api/types'
+```
+
+因为 `AppConfigPage.tsx` 比 `App.tsx` 多了一层目录。
+
+前端类比：
+
+```txt
+./api/settings
+```
+
+表示当前文件同级目录下找 `api/settings`。
+
+```txt
+../api/settings
+```
+
+表示先回到上一层，再找 `api/settings`。
+
+`frontend/src/pages/AppConfigPage.tsx` 完整代码：
+
+```tsx
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Bot,
+  Flame,
+  ListChecks,
+  MessageCircle,
+  Mic,
+  Settings,
+  Volume2,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { getSettings, updateSetting } from '../api/settings'
+import type { AppSetting } from '../api/types'
+
+type SettingMeta = {
+  Icon: LucideIcon
+  tone: 'blue' | 'yellow' | 'green' | 'purple' | 'indigo' | 'orange'
+  configurable: boolean
+}
+
+const settingMetaMap: Record<string, SettingMeta> = {
+  greeting: {
+    Icon: MessageCircle,
+    tone: 'blue',
+    configurable: true,
+  },
+  suggestions: {
+    Icon: ListChecks,
+    tone: 'yellow',
+    configurable: false,
+  },
+  tts: {
+    Icon: Volume2,
+    tone: 'green',
+    configurable: false,
+  },
+  stt: {
+    Icon: Mic,
+    tone: 'purple',
+    configurable: false,
+  },
+  model_config: {
+    Icon: Bot,
+    tone: 'indigo',
+    configurable: true,
+  },
+  hot_recommend: {
+    Icon: Flame,
+    tone: 'orange',
+    configurable: true,
+  },
+}
+
+export function AppConfigPage() {
+  const [settings, setSettings] = useState<AppSetting[]>([])
+  const [updatingCode, setUpdatingCode] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getSettings()
+      .then(data => {
+        setSettings(data)
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : '请求失败')
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+  }, [])
+
+  const enabledCount = useMemo(() => {
+    return settings.filter(item => item.enabled).length
+  }, [settings])
+
+  const handleToggle = async (item: AppSetting) => {
+    setUpdatingCode(item.code)
+    setError(null)
+
+    try {
+      const updated = await updateSetting(item.code, {
+        enabled: !item.enabled,
+        config: item.config,
+      })
+
+      setSettings(currentSettings =>
+        currentSettings.map(current => (current.code === updated.code ? updated : current)),
+      )
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '更新失败')
+    } finally {
+      setUpdatingCode(null)
+    }
+  }
+
+  return (
+    <main className="app-page">
+      <div className="page-shell">
+        <nav className="breadcrumb" aria-label="面包屑">
+          <span>系统管理</span>
+          <span>/</span>
+          <strong>应用配置</strong>
+        </nav>
+
+        <header className="page-header">
+          <div>
+            <h1>应用配置</h1>
+            <p>管理智能问数相关能力开关。</p>
+          </div>
+          <div className="summary">
+            <span>{enabledCount}</span>
+            <small>已开启</small>
+          </div>
+        </header>
+
+        {loading && <p className="state-text">加载中...</p>}
+        {error && <p className="state-text error">{error}</p>}
+
+        {!loading && !error && (
+          <section className="settings-grid" aria-label="应用配置列表">
+            {settings.map(item => {
+              const meta = settingMetaMap[item.code] ?? {
+                Icon: Settings,
+                tone: 'blue' as const,
+                configurable: false,
+              }
+              const { Icon } = meta
+
+              return (
+                <article className="setting-card" key={item.code}>
+                  <div className={`setting-icon ${meta.tone}`} aria-hidden="true">
+                    <Icon size={22} strokeWidth={2.2} />
+                  </div>
+
+                  <div className="setting-content">
+                    <div className="setting-title-row">
+                      <h2>{item.name}</h2>
+                      <div className="setting-actions">
+                        {meta.configurable && (
+                          <button
+                            className="icon-button"
+                            type="button"
+                            aria-label={`${item.name}配置`}
+                          >
+                            <Settings size={18} strokeWidth={2.2} />
+                          </button>
+                        )}
+                        <button
+                          className={item.enabled ? 'switch is-on' : 'switch'}
+                          type="button"
+                          role="switch"
+                          aria-checked={item.enabled}
+                          disabled={updatingCode === item.code}
+                          onClick={() => handleToggle(item)}
+                        >
+                          <span />
+                        </button>
+                      </div>
+                    </div>
+                    <p>{item.description}</p>
+                  </div>
+                </article>
+              )
+            })}
+          </section>
+        )}
+      </div>
+    </main>
+  )
+}
+```
+
+### 21.4 替换 `frontend/src/App.tsx`
+
+把 `frontend/src/App.tsx` 改成路由入口：
+
+```tsx
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import './App.css'
+import { AppConfigPage } from './pages/AppConfigPage'
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Navigate to="/settings" replace />} />
+        <Route path="/settings" element={<AppConfigPage />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default App
+```
+
+这里几个点要理解：
+
+```tsx
+<BrowserRouter>
+```
+
+表示启用浏览器路由。
+
+```tsx
+<Routes>
+```
+
+表示一组路由规则。
+
+```tsx
+<Route path="/settings" element={<AppConfigPage />} />
+```
+
+表示访问：
+
+```txt
+/settings
+```
+
+时渲染：
+
+```tsx
+<AppConfigPage />
+```
+
+```tsx
+<Route path="/" element={<Navigate to="/settings" replace />} />
+```
+
+表示访问首页 `/` 时，自动跳转到 `/settings`。
+
+`replace` 的意思是：
+
+```txt
+不要在浏览器历史记录里额外留下一条 /。
+```
+
+这样用户按返回键时不会在 `/` 和 `/settings` 之间来回跳。
+
+### 21.5 本轮不改 `App.css`
+
+这一轮不需要改 CSS。
+
+因为应用配置页的 DOM 结构和 className 没变，只是从 `App.tsx` 移到了 `pages/AppConfigPage.tsx`。
+
+`App.tsx` 仍然导入：
+
+```tsx
+import './App.css'
+```
+
+所以样式仍然生效。
+
+### 21.6 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+如果 build 通过，打开：
+
+```txt
+http://127.0.0.1:5173
+```
+
+你应该会被自动跳转到：
+
+```txt
+http://127.0.0.1:5173/settings
+```
+
+页面视觉应该和第 20 步完全一样。
+
+再测试一个开关：
+
+- Network 里仍然应该出现 `PATCH /api/settings/{code}`。
+- 请求状态仍然应该是 `200`。
+
+### 21.7 本轮验收标准
+
+完成第 21 步后，应该满足：
+
+1. `pnpm build` 通过。
+2. 访问 `/` 会跳转到 `/settings`。
+3. `/settings` 页面仍然显示应用配置。
+4. 开关功能仍然可用。
+
+你现在只做：
+
+1. 执行 `pnpm add react-router-dom`。
+2. 创建 `frontend/src/pages/AppConfigPage.tsx`。
+3. 把应用配置页代码移进去。
+4. 替换 `frontend/src/App.tsx`。
+5. 执行 `pnpm build`。
+6. 打开 `/settings` 验证页面和开关。
+7. 把结果发给我。
+
+### 21.8 验收结果
+
+已完成：
+
+- `react-router-dom` 已安装。
+- `frontend/src/pages/AppConfigPage.tsx` 已创建。
+- `frontend/src/App.tsx` 已变成路由入口。
+- 访问 `/settings` 可以正常显示应用配置页。
+- 页面视觉和第 20 步保持一致。
+
+当前前端结构已经从：
+
+```txt
+App.tsx 直接写页面
+```
+
+变成：
+
+```txt
+App.tsx
+  -> 路由入口
+
+pages/AppConfigPage.tsx
+  -> 应用配置页
+```
+
+下一步可以开始为第二个页面「回复校对」准备前端 API。
+
+## 第 22 步：创建回复校对前端 API 层
+
+这一轮先不画页面。
+
+只创建：
+
+```txt
+frontend/src/api/feedbacks.ts
+```
+
+并补充 `frontend/src/api/types.ts` 里的反馈相关类型。
+
+为什么先做 API 层：
+
+- 后端已经有 `/api/feedbacks`。
+- 回复校对页面需要列表、筛选、分页、详情、处理反馈。
+- 如果页面组件里直接写 `fetch`，后面会很乱。
+- 先把 API 函数封装好，页面只调用函数，不关心 URL 怎么拼。
+
+前端类比：
+
+```txt
+pages/FeedbackReviewPage.tsx
+  -> 负责渲染页面
+
+api/feedbacks.ts
+  -> 负责请求后端
+```
+
+这和我们之前做 `settings.ts` 是一样的。
+
+### 22.1 修改 `frontend/src/api/types.ts`
+
+打开：
+
+```txt
+frontend/src/api/types.ts
+```
+
+在现有 `Feedback` 类型下面追加：
+
+```ts
+export type FeedbackStatus = 'pending' | 'resolved'
+
+export type FeedbackListResponse = {
+  total: number
+  page: number
+  page_size: number
+  items: Feedback[]
+}
+
+export type FeedbackQuery = {
+  question?: string
+  user?: string
+  status?: FeedbackStatus
+  page?: number
+  page_size?: number
+}
+
+export type FeedbackCreatePayload = {
+  user_name: string
+  question: string
+  ai_answer: string
+  message_id: number | null
+}
+
+export type FeedbackUpdatePayload = {
+  status?: FeedbackStatus
+  remark?: string
+}
+```
+
+### 22.2 类型解释
+
+#### `FeedbackStatus`
+
+```ts
+export type FeedbackStatus = 'pending' | 'resolved'
+```
+
+表示反馈状态只能是这两个值之一：
+
+```txt
+pending  待处理
+resolved 已处理
+```
+
+为什么不直接写 `string`？
+
+因为写成联合类型后，TypeScript 会帮你防止拼错。
+
+例如下面这种会报错：
+
+```ts
+const status: FeedbackStatus = 'resolve'
+```
+
+因为正确值是：
+
+```txt
+resolved
+```
+
+#### `FeedbackListResponse`
+
+后端 `GET /api/feedbacks` 返回的不是单纯数组，而是：
+
+```json
+{
+  "total": 6,
+  "page": 1,
+  "page_size": 10,
+  "items": []
+}
+```
+
+所以前端类型要写成：
+
+```ts
+export type FeedbackListResponse = {
+  total: number
+  page: number
+  page_size: number
+  items: Feedback[]
+}
+```
+
+这和应用配置不同。
+
+应用配置接口：
+
+```txt
+GET /api/settings
+```
+
+直接返回数组：
+
+```ts
+AppSetting[]
+```
+
+反馈列表接口：
+
+```txt
+GET /api/feedbacks
+```
+
+返回分页对象：
+
+```ts
+FeedbackListResponse
+```
+
+#### `FeedbackQuery`
+
+```ts
+export type FeedbackQuery = {
+  question?: string
+  user?: string
+  status?: FeedbackStatus
+  page?: number
+  page_size?: number
+}
+```
+
+这里每个字段后面都有 `?`。
+
+意思是：
+
+```txt
+这些查询条件都是可选的。
+```
+
+你可以只传：
+
+```ts
+{ page: 1, page_size: 10 }
+```
+
+也可以传：
+
+```ts
+{ question: '北京', status: 'pending', page: 1, page_size: 10 }
+```
+
+#### `FeedbackCreatePayload`
+
+这个类型对应：
+
+```txt
+POST /api/feedbacks
+```
+
+当前回复校对页暂时不创建反馈，但后面智能问数页里可能会用到：
+
+```txt
+用户标记 AI 回答有误
+  -> 创建一条反馈
+```
+
+所以 API 层先补上。
+
+#### `FeedbackUpdatePayload`
+
+这个类型对应：
+
+```txt
+PATCH /api/feedbacks/{feedback_id}
+```
+
+页面点击「处理」时，会传：
+
+```ts
+{
+  status: 'resolved',
+  remark: '已核对，数据口径已修正'
+}
+```
+
+### 22.3 创建 `frontend/src/api/feedbacks.ts`
+
+创建文件：
+
+```txt
+frontend/src/api/feedbacks.ts
+```
+
+写入：
+
+```ts
+import { http } from './http'
+import type {
+  Feedback,
+  FeedbackCreatePayload,
+  FeedbackListResponse,
+  FeedbackQuery,
+  FeedbackUpdatePayload,
+} from './types'
+
+const buildFeedbackQuery = (query: FeedbackQuery = {}) => {
+  const searchParams = new URLSearchParams()
+
+  if (query.question) {
+    searchParams.set('question', query.question)
+  }
+
+  if (query.user) {
+    searchParams.set('user', query.user)
+  }
+
+  if (query.status) {
+    searchParams.set('status', query.status)
+  }
+
+  if (query.page) {
+    searchParams.set('page', String(query.page))
+  }
+
+  if (query.page_size) {
+    searchParams.set('page_size', String(query.page_size))
+  }
+
+  const queryString = searchParams.toString()
+
+  return queryString ? `?${queryString}` : ''
+}
+
+export const getFeedbacks = (query: FeedbackQuery = {}) => {
+  return http.get<FeedbackListResponse>(`/api/feedbacks${buildFeedbackQuery(query)}`)
+}
+
+export const getFeedback = (feedbackId: number) => {
+  return http.get<Feedback>(`/api/feedbacks/${feedbackId}`)
+}
+
+export const createFeedback = (payload: FeedbackCreatePayload) => {
+  return http.post<Feedback>('/api/feedbacks', payload)
+}
+
+export const updateFeedback = (feedbackId: number, payload: FeedbackUpdatePayload) => {
+  return http.patch<Feedback>(`/api/feedbacks/${feedbackId}`, payload)
+}
+```
+
+### 22.4 `URLSearchParams` 是什么
+
+```ts
+const searchParams = new URLSearchParams()
+```
+
+`URLSearchParams` 是浏览器内置 API，用来拼查询参数。
+
+比如你写：
+
+```ts
+searchParams.set('question', '北京')
+searchParams.set('page', '1')
+```
+
+最后：
+
+```ts
+searchParams.toString()
+```
+
+会得到：
+
+```txt
+question=%E5%8C%97%E4%BA%AC&page=1
+```
+
+也就是 URL 编码后的查询字符串。
+
+为什么不用字符串拼接？
+
+不要写成：
+
+```ts
+`?question=${query.question}&page=${query.page}`
+```
+
+因为中文、空格、特殊字符都需要编码。
+
+`URLSearchParams` 会自动帮你处理。
+
+前端类比：
+
+```ts
+new URLSearchParams({ question: '北京' }).toString()
+```
+
+就是更安全的 query string 生成方式。
+
+### 22.5 为什么 `page` 要转成字符串
+
+```ts
+searchParams.set('page', String(query.page))
+```
+
+`URLSearchParams.set()` 的第二个参数必须是字符串。
+
+但我们的 `page` 类型是数字：
+
+```ts
+page?: number
+```
+
+所以要用：
+
+```ts
+String(query.page)
+```
+
+把数字转成字符串。
+
+前端类比：
+
+```ts
+String(1) // "1"
+```
+
+### 22.6 为什么返回值可能是空字符串
+
+```ts
+return queryString ? `?${queryString}` : ''
+```
+
+如果没有任何查询条件：
+
+```ts
+getFeedbacks()
+```
+
+那请求地址应该是：
+
+```txt
+/api/feedbacks
+```
+
+而不是：
+
+```txt
+/api/feedbacks?
+```
+
+虽然多一个 `?` 通常也能工作，但写干净一点更好。
+
+如果有查询条件：
+
+```ts
+getFeedbacks({ status: 'pending', page: 1 })
+```
+
+请求地址就是：
+
+```txt
+/api/feedbacks?status=pending&page=1
+```
+
+### 22.7 本轮验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+如果 build 通过，说明类型和语法没问题。
+
+这一轮没有页面变化，所以不用截图页面。
+
+### 22.8 本轮验收标准
+
+完成第 22 步后，应该满足：
+
+1. 新增 `frontend/src/api/feedbacks.ts`。
+2. `frontend/src/api/types.ts` 新增反馈列表、查询、创建、更新类型。
+3. `pnpm build` 通过。
+
+你现在只做：
+
+1. 修改 `frontend/src/api/types.ts`。
+2. 创建 `frontend/src/api/feedbacks.ts`。
+3. 执行 `pnpm build`。
+4. 把构建结果发给我。
+
+### 22.9 验收结果
+
+已完成：
+
+- `frontend/src/api/types.ts` 已补充反馈相关类型。
+- 反馈 API 文件已创建。
+- `pnpm build` 通过。
+
+注意：
+
+计划里原本写的是：
+
+```txt
+frontend/src/api/feedbacks.ts
+```
+
+你实际创建的是：
+
+```txt
+frontend/src/api/feedback.ts
+```
+
+这不是功能错误。
+
+我们后续就按当前实际文件名继续：
+
+```ts
+import { getFeedbacks } from '../api/feedback'
+```
+
+原因：
+
+- 文件名只是模块命名。
+- 只要导入路径和实际文件一致，代码就能正常工作。
+- 现在没必要为了一个 `s` 来回改名，先保持当前项目状态继续推进。
+
+## 第 23 步：创建「回复校对」页面第一版，只展示反馈列表
+
+这一页对应原型里的：
+
+```txt
+反馈管理 / 回复校对
+```
+
+本轮只做第一版：
+
+```txt
+读取反馈列表
+  -> 显示表格
+```
+
+先不要做：
+
+- 搜索问题。
+- 搜索用户。
+- 状态筛选。
+- 分页切换。
+- 点击处理按钮。
+- 处理弹窗。
+
+原因：
+
+- 我们刚创建了反馈 API 层。
+- 下一步应该先验证页面能调用 `getFeedbacks()`。
+- 列表能显示后，再逐步加筛选、分页和处理操作。
+
+前端类比：
+
+```txt
+第 22 步：写 api/feedback.ts
+第 23 步：写 pages/FeedbackReviewPage.tsx 调用它
+```
+
+### 23.1 创建页面文件
+
+创建文件：
+
+```txt
+frontend/src/pages/FeedbackReviewPage.tsx
+```
+
+写入：
+
+```tsx
+import { useEffect, useState } from 'react'
+import { getFeedbacks } from '../api/feedback'
+import type { Feedback, FeedbackListResponse } from '../api/types'
+
+const formatStatus = (status: Feedback['status']) => {
+  if (status === 'resolved') {
+    return '已处理'
+  }
+
+  return '待处理'
+}
+
+const formatDateTime = (value: string) => {
+  return new Date(value).toLocaleString('zh-CN', {
+    hour12: false,
+  })
+}
+
+function FeedbackReviewPage() {
+  const [feedbacks, setFeedbacks] = useState<Feedback[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getFeedbacks({
+      page: 1,
+      page_size: 10,
+    })
+      .then((data: FeedbackListResponse) => {
+        setFeedbacks(data.items)
+        setTotal(data.total)
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : '请求失败')
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+  }, [])
+
+  return (
+    <main className="app-page">
+      <div className="page-shell">
+        <nav className="breadcrumb" aria-label="面包屑">
+          <span>反馈管理</span>
+          <span>/</span>
+          <strong>回复校对</strong>
+        </nav>
+
+        <header className="page-header">
+          <div>
+            <h1>回复校对</h1>
+            <p>查看用户标记为 AI 回复有误的信息数据。</p>
+          </div>
+          <div className="summary">
+            <span>{total}</span>
+            <small>共计</small>
+          </div>
+        </header>
+
+        {loading && <p className="state-text">加载中...</p>}
+        {error && <p className="state-text error">{error}</p>}
+
+        {!loading && !error && (
+          <section className="table-card" aria-label="回复校对列表">
+            <div className="table-toolbar">
+              <strong>反馈列表</strong>
+              <span>共 {total} 条</span>
+            </div>
+
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>序号</th>
+                    <th>用户</th>
+                    <th>问题</th>
+                    <th>反馈时间</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {feedbacks.map((item, index) => (
+                    <tr key={item.id}>
+                      <td>{index + 1}</td>
+                      <td>{item.user_name}</td>
+                      <td>{item.question}</td>
+                      <td>{formatDateTime(item.created_at)}</td>
+                      <td>
+                        <span className={item.status === 'resolved' ? 'status-tag resolved' : 'status-tag pending'}>
+                          {formatStatus(item.status)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {feedbacks.length === 0 && (
+                    <tr>
+                      <td className="empty-cell" colSpan={5}>
+                        暂无反馈数据
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+      </div>
+    </main>
+  )
+}
+
+export default FeedbackReviewPage
+```
+
+### 23.2 这段代码在做什么
+
+页面加载时：
+
+```tsx
+useEffect(() => {
+  getFeedbacks({
+    page: 1,
+    page_size: 10,
+  })
+  ...
+}, [])
+```
+
+它会调用：
+
+```txt
+GET /api/feedbacks?page=1&page_size=10
+```
+
+后端返回：
+
+```ts
+{
+  total: number
+  page: number
+  page_size: number
+  items: Feedback[]
+}
+```
+
+我们把：
+
+```tsx
+data.items
+```
+
+放进：
+
+```tsx
+feedbacks
+```
+
+把：
+
+```tsx
+data.total
+```
+
+放进：
+
+```tsx
+total
+```
+
+### 23.3 为什么要有 `formatStatus`
+
+后端返回的状态是英文：
+
+```txt
+pending
+resolved
+```
+
+页面要显示中文：
+
+```txt
+待处理
+已处理
+```
+
+所以写一个转换函数：
+
+```tsx
+const formatStatus = (status: Feedback['status']) => {
+  if (status === 'resolved') {
+    return '已处理'
+  }
+
+  return '待处理'
+}
+```
+
+这里的：
+
+```tsx
+Feedback['status']
+```
+
+表示取 `Feedback` 类型里的 `status` 字段类型。
+
+前端类比：
+
+```ts
+type Status = Feedback['status']
+```
+
+这样如果以后 `Feedback.status` 类型改了，这里也能跟着变。
+
+### 23.4 为什么要有 `formatDateTime`
+
+后端返回的时间通常是 ISO 字符串：
+
+```txt
+2026-06-29T07:44:15.313295Z
+```
+
+页面上直接显示不好看。
+
+所以用：
+
+```tsx
+new Date(value).toLocaleString('zh-CN', {
+  hour12: false,
+})
+```
+
+把它转成中文地区更容易读的时间格式。
+
+`hour12: false` 表示使用 24 小时制。
+
+### 23.5 为什么第一版不做筛选和分页
+
+原型里有：
+
+- 搜索问题。
+- 搜索用户。
+- 状态下拉。
+- 分页。
+- 处理按钮。
+
+这些都要做，但不要一次塞进去。
+
+本轮只验证：
+
+```txt
+页面能不能调用 getFeedbacks()
+表格能不能显示数据
+```
+
+下一轮再加筛选。
+
+### 23.6 修改路由
+
+打开：
+
+```txt
+frontend/src/App.tsx
+```
+
+增加导入：
+
+```tsx
+import FeedbackReviewPage from './pages/FeedbackReviewPage'
+```
+
+然后在 `Routes` 里增加：
+
+```tsx
+<Route path="/feedbacks" element={<FeedbackReviewPage />} />
+```
+
+完整结构类似：
+
+```tsx
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import AppConfigPage from './pages/AppConfigPage'
+import FeedbackReviewPage from './pages/FeedbackReviewPage'
+import './App.css'
+
+const APP = () => {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Navigate to="/settings" replace />} />
+        <Route path="/settings" element={<AppConfigPage />} />
+        <Route path="/feedbacks" element={<FeedbackReviewPage />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default APP
+```
+
+### 23.7 追加样式
+
+打开：
+
+```txt
+frontend/src/App.css
+```
+
+在文件底部追加：
+
+```css
+.table-card {
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e4e9f2;
+  padding: 14px 18px;
+  color: #667085;
+}
+
+.table-toolbar strong {
+  color: #111827;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.data-table th {
+  background: #f4f6fa;
+  color: #475467;
+  font-weight: 600;
+  text-align: left;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e4e9f2;
+  white-space: nowrap;
+}
+
+.data-table td {
+  color: #344054;
+  padding: 14px 16px;
+  border-bottom: 1px solid #eef2f7;
+  white-space: nowrap;
+}
+
+.data-table tbody tr:hover {
+  background: #f8faff;
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 14px;
+}
+
+.status-tag.pending {
+  background: #fff7e6;
+  color: #d97706;
+}
+
+.status-tag.resolved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.empty-cell {
+  color: #98a2b3;
+  text-align: center;
+}
+```
+
+### 23.8 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+如果 build 通过，打开：
+
+```txt
+http://127.0.0.1:5173/feedbacks
+```
+
+检查：
+
+1. 页面标题是 `回复校对`。
+2. 顶部有 `反馈管理 / 回复校对`。
+3. 页面显示反馈表格。
+4. Network 里能看到：
+
+```txt
+GET /api/feedbacks?page=1&page_size=10
+```
+
+5. 请求状态是 `200`。
+
+如果表格显示“暂无反馈数据”，说明你当前数据库里没有反馈记录，不代表页面错了。
+
+可以先不管，下一步我们再补筛选和处理操作。
+
+### 23.9 本轮验收标准
+
+完成第 23 步后，应该满足：
+
+1. `pnpm build` 通过。
+2. `/feedbacks` 路由能打开。
+3. 页面能请求 `GET /api/feedbacks?page=1&page_size=10`。
+4. 表格能显示反馈数据，或者在无数据时显示“暂无反馈数据”。
+
+你现在只做：
+
+1. 创建 `frontend/src/pages/FeedbackReviewPage.tsx`。
+2. 修改 `frontend/src/App.tsx`，增加 `/feedbacks` 路由。
+3. 修改 `frontend/src/App.css`，追加表格样式。
+4. 执行 `pnpm build`。
+5. 打开 `/feedbacks` 验证。
+6. 把构建结果和页面截图发给我。
+
+## 第 24 步：创建智能问数页面壳子
+
+这一轮只做页面入口，不写业务逻辑。
+
+原因：智能问数页面是 3 个页面里最复杂的，里面会涉及会话列表、消息列表、发送问题、结构化 AI 回复、反馈创建。我们不要一下子全写，否则你二面讲的时候会很难把数据流讲清楚。
+
+这一步的目标只有两个：
+
+1. 新增一个空的智能问数页面组件。
+2. 在路由里能通过 `/chat` 打开它。
+
+### 24.1 创建页面文件
+
+创建文件：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+写入：
+
+```tsx
+const ChatPage = () => {
+  return (
+    <main className="app-page">
+      <div className="page-shell">
+        <nav className="breadcrumb" aria-label="面包屑">
+          <span>智能问数</span>
+          <span>/</span>
+          <strong>经营单元收入&完成率分析</strong>
+        </nav>
+
+        <header className="page-header">
+          <div>
+            <h1>智能问数</h1>
+            <p>通过自然语言问题查看经营数据分析结果。</p>
+          </div>
+        </header>
+      </div>
+    </main>
+  )
+}
+
+export default ChatPage
+```
+
+解释：
+
+- `ChatPage` 是一个普通 React 页面组件。
+- 现在先复用已有的 `app-page`、`page-shell`、`breadcrumb`、`page-header` 样式。
+- 这一步不请求接口，是为了先确认路由和页面入口没问题。
+
+前端类比：
+
+- 这相当于你先把一个新页面注册进路由，页面里先放静态结构。
+- 后面再一点点往里面加状态、接口请求和交互。
+
+### 24.2 修改路由
+
+打开：
+
+```txt
+frontend/src/App.tsx
+```
+
+增加导入：
+
+```tsx
+import ChatPage from './pages/ChatPage'
+```
+
+然后在 `Routes` 里增加：
+
+```tsx
+<Route path="/chat" element={<ChatPage />} />
+```
+
+同时可以把首页重定向从 `/settings` 改成 `/chat`：
+
+```tsx
+<Route path="/" element={<Navigate to="/chat" replace />} />
+```
+
+完整结构类似：
+
+```tsx
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import AppConfigPage from './pages/AppConfigPage'
+import ChatPage from './pages/ChatPage'
+import FeedbackReviewPage from './pages/FeedbackReviewPage'
+import './App.css'
+
+const APP = () => {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Navigate to="/chat" replace />} />
+        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/settings" element={<AppConfigPage />} />
+        <Route path="/feedbacks" element={<FeedbackReviewPage />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default APP
+```
+
+解释：
+
+- `BrowserRouter` 负责监听浏览器地址变化。
+- `Routes` 里面放所有页面规则。
+- `Route path="/chat"` 表示访问 `/chat` 时渲染 `ChatPage`。
+- `Navigate` 是重定向，访问 `/` 时自动跳到 `/chat`。
+
+### 24.3 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+pnpm dev
+```
+
+浏览器打开：
+
+```txt
+http://localhost:5173/chat
+```
+
+检查：
+
+1. 页面能打开。
+2. 页面标题是 `智能问数`。
+3. 面包屑是 `智能问数 / 经营单元收入&完成率分析`。
+4. `pnpm build` 通过。
+
+你现在只做：
+
+1. 创建 `frontend/src/pages/ChatPage.tsx`。
+2. 修改 `frontend/src/App.tsx`，增加 `/chat` 路由。
+3. 执行 `pnpm build`。
+4. 打开 `/chat` 验证。
+5. 把构建结果和页面截图发给我。
+
+## 第 25 步：搭建智能问数静态布局
+
+这一轮只写静态 UI，不接后端接口。
+
+原因：智能问数页面后面会接会话列表、消息发送、AI 回复数据和反馈创建。先把页面区域拆清楚，后面每接一个接口，都能知道数据应该落到哪个区域。
+
+这一步要做 3 件事：
+
+1. 把 `ChatPage` 改成“左侧会话 + 右侧对话区”的布局。
+2. 新增单独的 `chat.css`。
+3. 在 `App.css` 中引入 `chat.css`。
+
+### 25.1 修改 `ChatPage.tsx`
+
+打开：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+替换为：
+
+```tsx
+import { Plus, Send } from 'lucide-react'
+
+const ChatPage = () => {
+  return (
+    <main className="chat-page">
+      <aside className="chat-sidebar">
+        <div className="chat-sidebar-header">
+          <strong>近30天记录</strong>
+        </div>
+
+        <button className="new-chat-button" type="button">
+          <Plus size={18} />
+          开启新对话
+        </button>
+
+        <nav className="chat-history" aria-label="历史对话">
+          <button className="chat-history-item active" type="button">
+            经营单元收入&完成率...
+          </button>
+          <button className="chat-history-item" type="button">
+            政企行业收入筛选
+          </button>
+          <button className="chat-history-item" type="button">
+            产品型号销售统计
+          </button>
+        </nav>
+      </aside>
+
+      <section className="chat-main">
+        <header className="chat-header">
+          <h1>经营单元收入&完成率分析</h1>
+        </header>
+
+        <div className="chat-content">
+          <article className="assistant-card">
+            <h2>经营单元收入&完成率分析</h2>
+            <p>这里后面会展示后端返回的 AI 回复内容。</p>
+          </article>
+        </div>
+
+        <form className="chat-input-bar">
+          <input placeholder="请写下您的想法..." />
+          <button type="button" aria-label="发送">
+            <Send size={18} />
+          </button>
+        </form>
+      </section>
+    </main>
+  )
+}
+
+export default ChatPage
+```
+
+说明：
+
+- `chat-page`：整个智能问数页面容器。
+- `chat-sidebar`：左侧会话列表区域。
+- `chat-main`：右侧主对话区域。
+- `chat-content`：消息滚动区域。
+- `chat-input-bar`：底部输入框区域。
+
+这一步的按钮暂时都没有事件，因为现在只做布局。后面会逐个加：
+
+- `开启新对话`：调用 `POST /api/sessions`
+- 点击历史对话：切换当前会话
+- 输入框发送：调用 `POST /api/sessions/{session_id}/messages`
+
+### 25.2 新增 `chat.css`
+
+创建文件：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+写入：
+
+```css
+.chat-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  background: #f4f6fa;
+  color: #172033;
+}
+
+.chat-sidebar {
+  border-right: 1px solid #dbe3ef;
+  background: #f8fbff;
+  padding: 18px 12px;
+  box-sizing: border-box;
+}
+
+.chat-sidebar-header {
+  color: #18365f;
+  margin-bottom: 16px;
+}
+
+.new-chat-button {
+  width: 100%;
+  height: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: #ede7ff;
+  color: #5b21f3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chat-history {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.chat-history-item {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #18365f;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-history-item:hover,
+.chat-history-item.active {
+  background: #dbeafe;
+}
+
+.chat-main {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+  background: linear-gradient(90deg, #fff 0%, #fff 84%, #eef1f6 100%);
+}
+
+.chat-header {
+  border-bottom: 2px solid #2563eb;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+}
+
+.chat-header h1 {
+  margin: 0;
+  color: #18365f;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.chat-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 36px 96px;
+  box-sizing: border-box;
+}
+
+.assistant-card {
+  max-width: 1068px;
+  border: 1px solid #e5eaf2;
+  border-radius: 8px;
+  background: #fff;
+  padding: 18px;
+  box-sizing: border-box;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.05);
+}
+
+.assistant-card h2 {
+  margin: 0 0 8px;
+  color: #18365f;
+  font-size: 16px;
+}
+
+.assistant-card p {
+  color: #667085;
+}
+
+.chat-input-bar {
+  width: min(640px, calc(100% - 72px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+  justify-self: center;
+  margin-bottom: 18px;
+  border: 1px solid #cbd6e6;
+  border-radius: 999px;
+  background: #fff;
+  padding: 7px 8px 7px 18px;
+  box-shadow: 0 10px 30px rgba(37, 99, 235, 0.12);
+}
+
+.chat-input-bar input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #172033;
+  font-size: 14px;
+  background: transparent;
+}
+
+.chat-input-bar input::placeholder {
+  color: #98a2b3;
+}
+
+.chat-input-bar button {
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .chat-page {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid #dbe3ef;
+  }
+
+  .chat-history {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .chat-history-item {
+    flex: 0 0 180px;
+  }
+
+  .chat-content {
+    padding: 18px 18px 96px;
+  }
+
+  .chat-input-bar {
+    width: calc(100% - 36px);
+  }
+}
+```
+
+### 25.3 在 `App.css` 引入样式
+
+打开：
+
+```txt
+frontend/src/App.css
+```
+
+改成：
+
+```css
+@import './styles/layout.css';
+@import './styles/chat.css';
+@import './styles/settings.css';
+@import './styles/feedback.css';
+```
+
+### 25.4 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+然后打开：
+
+```txt
+http://localhost:5173/chat
+```
+
+检查：
+
+1. 左侧有 `近30天记录` 和 `开启新对话`。
+2. 右侧顶部标题是 `经营单元收入&完成率分析`。
+3. 中间有一张占位回复卡片。
+4. 底部有输入框和发送按钮。
+5. `pnpm build` 通过。
+
+你现在只做：
+
+1. 修改 `frontend/src/pages/ChatPage.tsx`。
+2. 创建 `frontend/src/styles/chat.css`。
+3. 修改 `frontend/src/App.css` 引入 `chat.css`。
+4. 执行 `pnpm build`。
+5. 把构建结果和页面截图发给我。
+
+## 第 26 步：接入会话列表接口
+
+这一轮只接一个接口：
+
+```txt
+GET /api/sessions
+```
+
+目标：把左侧写死的历史对话，替换成后端数据库里的会话列表。
+
+暂时不做：
+
+- 不新建会话
+- 不发送问题
+- 不展示真实消息
+- 不渲染 AI 表格/图表
+
+原因：这是智能问数页面的第一个真实数据流。先把“页面加载 -> 请求接口 -> 渲染列表 -> 点击选中”的读流程跑通，后面再加写操作会更清楚。
+
+前端类比：
+
+- 这一步类似你做管理后台时，先把列表页的 `GET list` 接上。
+- `POST create`、`PATCH update`、详情渲染都先不碰。
+
+### 26.1 确认已有接口方法
+
+打开：
+
+```txt
+frontend/src/api/chat.ts
+```
+
+确认里面有：
+
+```ts
+import { http } from './http'
+import type { ChatSession } from './types'
+
+export function getSessions() {
+  return http.get<ChatSession[]>('/api/sessions')
+}
+```
+
+如果你的文件里已经有 `getSessions`，这一步不用改。
+
+解释：
+
+- `getSessions` 是前端 API 方法。
+- 它只负责调用后端接口，不负责页面状态。
+- 返回类型是 `Promise<ChatSession[]>`。
+
+### 26.2 修改 `ChatPage.tsx`
+
+打开：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+替换为：
+
+```tsx
+import { useMemo, useState } from 'react'
+import { Plus, Send } from 'lucide-react'
+import { getSessions } from '../api/chat'
+import type { ChatSession } from '../api/types'
+import { useAsyncData } from '../hooks/useAsyncData'
+
+const defaultTitle = '经营单元收入&完成率分析'
+
+const formatDateTime = (value: string) => {
+  return new Date(value).toLocaleString('zh-CN', {
+    hour12: false,
+  })
+}
+
+const ChatPage = () => {
+  const {
+    data: sessions,
+    loading,
+    error,
+  } = useAsyncData<ChatSession[]>(getSessions, [])
+  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null)
+  const activeSessionId = selectedSessionId ?? sessions[0]?.id ?? null
+
+  const activeSession = useMemo(() => {
+    return sessions.find(session => session.id === activeSessionId) ?? null
+  }, [activeSessionId, sessions])
+
+  const pageTitle = activeSession?.title ?? defaultTitle
+
+  return (
+    <main className="chat-page">
+      <aside className="chat-sidebar">
+        <div className="chat-sidebar-header">
+          <strong>近30天记录</strong>
+        </div>
+
+        <button className="new-chat-button" type="button">
+          <Plus size={18} />
+          开启新对话
+        </button>
+
+        <nav className="chat-history" aria-label="历史对话">
+          {loading && <p className="chat-history-state">加载中...</p>}
+          {error && <p className="chat-history-state error">{error}</p>}
+
+          {!loading &&
+            !error &&
+            sessions.map(session => (
+              <button
+                className={
+                  session.id === activeSessionId
+                    ? 'chat-history-item active'
+                    : 'chat-history-item'
+                }
+                key={session.id}
+                type="button"
+                onClick={() => setSelectedSessionId(session.id)}
+              >
+                <span>{session.title}</span>
+                <small>{formatDateTime(session.updated_at)}</small>
+              </button>
+            ))}
+
+          {!loading && !error && sessions.length === 0 && (
+            <p className="chat-history-state">暂无历史对话</p>
+          )}
+        </nav>
+      </aside>
+
+      <section className="chat-main">
+        <header className="chat-header">
+          <h1>{pageTitle}</h1>
+        </header>
+
+        <div className="chat-content">
+          <article className="assistant-card">
+            <h2>{pageTitle}</h2>
+            <p>
+              {activeSession
+                ? '已选中该历史对话。下一步会展示这个会话里的消息。'
+                : '当前还没有历史对话。下一步会实现开启新对话。'}
+            </p>
+          </article>
+        </div>
+
+        <form className="chat-input-bar">
+          <input placeholder="请写下您的想法..." />
+          <button type="button" aria-label="发送">
+            <Send size={18} />
+          </button>
+        </form>
+      </section>
+    </main>
+  )
+}
+
+export default ChatPage
+```
+
+### 26.3 这段代码在做什么
+
+重点看这句：
+
+```tsx
+const {
+  data: sessions,
+  loading,
+  error,
+} = useAsyncData<ChatSession[]>(getSessions, [])
+```
+
+意思是：
+
+- 页面加载时调用 `getSessions`。
+- 请求成功后，数据放到 `sessions`。
+- 请求中，`loading` 是 `true`。
+- 请求失败，错误文案放到 `error`。
+- 初始值是空数组 `[]`。
+
+前端类比：
+
+- `useAsyncData(getSessions, [])` 可以理解成一个简化版的“列表请求 hook”。
+- 它把常见的 `data/loading/error` 统一封装起来，页面不用每次都手写一遍 `try/catch/finally`。
+
+再看这句：
+
+```tsx
+const activeSessionId = selectedSessionId ?? sessions[0]?.id ?? null
+```
+
+意思是：
+
+- 如果用户点击过某个会话，就用用户选中的 `selectedSessionId`。
+- 如果用户还没选过，并且接口返回了会话，就默认用第一条会话的 id。
+- 如果接口还没有数据，或者数据库里没有会话，就是 `null`。
+
+这里的第一条由后端决定。我们后端接口里按 `updated_at desc` 排序，所以第一条通常是最近更新的会话。
+
+为什么不在 `useEffect` 里写 `setActiveSessionId(sessions[0].id)`：
+
+- 新版本 React 的 lint 会提示：不要在 effect 里同步 setState 来派生状态。
+- 因为这个值本来就能从 `selectedSessionId` 和 `sessions` 算出来。
+- 直接派生可以少一次额外渲染，也能避免状态重复。
+
+再看这段：
+
+```tsx
+const activeSession = useMemo(() => {
+  return sessions.find(session => session.id === activeSessionId) ?? null
+}, [activeSessionId, sessions])
+```
+
+意思是：
+
+- 根据 `activeSessionId` 从 `sessions` 数组里找到当前选中的会话。
+- 找不到就返回 `null`。
+
+为什么用 `useMemo`：
+
+- 这里不是必须用。
+- 但它能表达一个清楚的关系：`activeSession` 是由 `sessions + activeSessionId` 派生出来的数据。
+- 面试时可以说：真正的源状态只有 `sessions` 和 `selectedSessionId`，`activeSessionId`、`activeSession` 都是派生数据，不单独存一份，避免状态重复。
+
+### 26.4 补充样式
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+在 `.chat-history-item` 后面追加：
+
+```css
+.chat-history-item span,
+.chat-history-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-history-item span {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.chat-history-item small {
+  margin-top: 4px;
+  color: #718096;
+  font-size: 12px;
+}
+
+.chat-history-state {
+  margin: 0;
+  color: #8a94a6;
+  font-size: 13px;
+  padding: 10px;
+}
+
+.chat-history-state.error {
+  color: #b42318;
+}
+```
+
+解释：
+
+- `span` 放会话标题。
+- `small` 放更新时间。
+- 两个都加省略号，避免长标题把侧边栏撑乱。
+- `chat-history-state` 用来显示加载、错误、空数据状态。
+
+### 26.5 验收方式
+
+这一步需要后端和前端都启动。
+
+后端：
+
+```bash
+cd ~/Desktop/full-stack-demo/backend
+source .venv/bin/activate
+uvicorn app.main:app --reload
+```
+
+前端：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm dev
+```
+
+构建检查：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+浏览器打开：
+
+```txt
+http://localhost:5173/chat
+```
+
+打开 DevTools 的 Network，检查是否有：
+
+```txt
+GET /api/sessions
+```
+
+预期：
+
+- 状态码是 `200`。
+- 如果数据库里有会话，左侧显示真实会话。
+- 如果数据库里没有会话，左侧显示 `暂无历史对话`。
+
+说明：
+
+- 如果开发环境里看到请求发了两次，大概率是 React StrictMode 的开发行为，不代表代码写错。
+- 这个接口是读操作，重复请求不会新增数据，所以是安全的。
+
+你现在只做：
+
+1. 确认 `frontend/src/api/chat.ts` 里有 `getSessions`。
+2. 修改 `frontend/src/pages/ChatPage.tsx`。
+3. 修改 `frontend/src/styles/chat.css`。
+4. 执行 `pnpm build`。
+5. 打开 `/chat`，确认 Network 里有 `GET /api/sessions`。
+6. 把构建结果和页面截图发给我。
+
+## 第 27 步：实现开启新对话
+
+这一轮只接一个写接口：
+
+```txt
+POST /api/sessions
+```
+
+目标：点击左侧 `开启新对话` 后，后端创建一条会话，前端把新会话显示到左侧列表并选中。
+
+暂时不做：
+
+- 不发送问题
+- 不展示消息列表
+- 不生成 AI 回复
+- 不创建反馈
+
+原因：上一轮已经完成 `GET /api/sessions`，这是读操作。现在补 `POST /api/sessions`，让智能问数页面先具备最小 CRUD 里的 `Create + Read`。
+
+前端类比：
+
+- `GET /api/sessions` 像列表查询。
+- `POST /api/sessions` 像新增一条列表数据。
+- 成功后前端不一定要重新请求列表，可以直接把接口返回的新数据插到当前列表最前面。
+
+### 27.1 确认已有 API 方法
+
+打开：
+
+```txt
+frontend/src/api/chat.ts
+```
+
+确认里面有：
+
+```ts
+export function createSession(title: string) {
+  return http.post<ChatSession>('/api/sessions', { title })
+}
+```
+
+如果你的文件里已经有 `createSession`，这一步不用改。
+
+解释：
+
+- 后端 `POST /api/sessions` 需要一个 `title`。
+- 前端传 `{ title }`，后端创建一条 `chat_sessions` 数据。
+- 后端返回新建好的 `ChatSession`，里面会有数据库生成的 `id`、`created_at`、`updated_at`。
+
+### 27.2 修改 `ChatPage.tsx`
+
+打开：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+把导入改成：
+
+```tsx
+import { useMemo, useState } from 'react'
+import { Plus, Send } from 'lucide-react'
+import { createSession, getSessions } from '../api/chat'
+import type { ChatSession } from '../api/types'
+import { useAsyncData } from '../hooks/useAsyncData'
+import { toAsyncResult } from '../utils/asyncResult'
+```
+
+在 `defaultTitle` 下面增加：
+
+```tsx
+const newSessionTitle = '新的智能问数'
+```
+
+把 `useAsyncData` 这一段改成：
+
+```tsx
+const {
+  data: sessions,
+  setData: setSessions,
+  loading,
+  error,
+  setError,
+} = useAsyncData<ChatSession[]>(getSessions, [])
+```
+
+解释：
+
+- 原来只需要读取 `sessions`。
+- 现在创建成功后，要主动更新左侧列表，所以需要拿到 `setData`。
+- 为了名字更清楚，我们重命名成 `setSessions`。
+
+在 `selectedSessionId` 下面增加创建状态：
+
+```tsx
+const [creatingSession, setCreatingSession] = useState(false)
+```
+
+在 `pageTitle` 下面增加函数：
+
+```tsx
+const handleCreateSession = async () => {
+  if (creatingSession) {
+    return
+  }
+
+  setCreatingSession(true)
+  setError(null)
+
+  const result = await toAsyncResult(createSession(newSessionTitle))
+
+  if (result.ok === false) {
+    setError(result.error)
+    setCreatingSession(false)
+    return
+  }
+
+  setSessions(currentSessions => [result.data, ...currentSessions])
+  setSelectedSessionId(result.data.id)
+  setCreatingSession(false)
+}
+```
+
+把按钮：
+
+```tsx
+<button className="new-chat-button" type="button">
+  <Plus size={18} />
+  开启新对话
+</button>
+```
+
+改成：
+
+```tsx
+<button
+  className="new-chat-button"
+  type="button"
+  disabled={creatingSession}
+  onClick={() => void handleCreateSession()}
+>
+  <Plus size={18} />
+  {creatingSession ? '创建中...' : '开启新对话'}
+</button>
+```
+
+### 27.3 这段代码在做什么
+
+重点看这个函数：
+
+```tsx
+const handleCreateSession = async () => {
+  if (creatingSession) {
+    return
+  }
+
+  setCreatingSession(true)
+  setError(null)
+
+  const result = await toAsyncResult(createSession(newSessionTitle))
+
+  if (result.ok === false) {
+    setError(result.error)
+    setCreatingSession(false)
+    return
+  }
+
+  setSessions(currentSessions => [result.data, ...currentSessions])
+  setSelectedSessionId(result.data.id)
+  setCreatingSession(false)
+}
+```
+
+逐句解释：
+
+```tsx
+if (creatingSession) {
+  return
+}
+```
+
+防止用户连续点按钮导致重复创建。
+
+```tsx
+setCreatingSession(true)
+setError(null)
+```
+
+进入创建中状态，并清掉上一次错误。
+
+```tsx
+const result = await toAsyncResult(createSession(newSessionTitle))
+```
+
+调用后端 `POST /api/sessions`。
+
+这里用 `toAsyncResult`，是为了不用在每个事件函数里写一大段 `try/catch`。
+
+成功时结果类似：
+
+```ts
+{
+  ok: true,
+  data: 新会话
+}
+```
+
+失败时结果类似：
+
+```ts
+{
+  ok: false,
+  error: '错误信息'
+}
+```
+
+```tsx
+if (result.ok === false) {
+  setError(result.error)
+  setCreatingSession(false)
+  return
+}
+```
+
+如果失败，把错误显示到页面上，然后结束函数。
+
+```tsx
+setSessions(currentSessions => [result.data, ...currentSessions])
+```
+
+把新会话插到左侧列表最前面。
+
+这里用了函数式更新，因为新列表依赖旧列表：
+
+```tsx
+currentSessions => [result.data, ...currentSessions]
+```
+
+前端类比：
+
+- 和你写 `setList(prev => [newItem, ...prev])` 是一样的。
+- 比直接写 `setSessions([result.data, ...sessions])` 更稳，因为它拿到的是 React 当前最新状态。
+
+```tsx
+setSelectedSessionId(result.data.id)
+```
+
+创建后自动选中新会话。
+
+```tsx
+setCreatingSession(false)
+```
+
+退出创建中状态。
+
+### 27.4 为什么这个 POST 放在点击事件里
+
+`POST /api/sessions` 会真的往数据库新增数据，所以它是一个有副作用的写操作。
+
+这种操作应该放在用户明确触发的事件里：
+
+```tsx
+onClick={() => void handleCreateSession()}
+```
+
+不要放到 `useEffect` 里。
+
+原因：
+
+- React 开发环境可能会重复执行 effect。
+- 如果把 POST 放进 effect，可能自动创建两条会话。
+- 放在点击事件里，语义更清楚：用户点一次，创建一次。
+
+### 27.5 补充按钮禁用样式
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+在 `.new-chat-button` 后面追加：
+
+```css
+.new-chat-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+```
+
+解释：
+
+- 创建中禁用按钮，避免重复点击。
+- 视觉上让用户知道按钮暂时不可用。
+
+### 27.6 验收方式
+
+后端和前端都保持启动。
+
+前端构建检查：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+浏览器打开：
+
+```txt
+http://localhost:5173/chat
+```
+
+然后点击：
+
+```txt
+开启新对话
+```
+
+打开 DevTools 的 Network，检查是否有：
+
+```txt
+POST /api/sessions
+```
+
+预期：
+
+1. `POST /api/sessions` 状态码是 `200`。
+2. 左侧出现一条 `新的智能问数`。
+3. 页面顶部标题变成 `新的智能问数`。
+4. 刷新页面后，这条会话仍然存在。
+
+为什么刷新后还在：
+
+- 因为这条会话不是只存在前端 state 里。
+- 后端已经写入 PostgreSQL。
+- 刷新后前端重新请求 `GET /api/sessions`，又从数据库把它查出来了。
+
+你现在只做：
+
+1. 修改 `frontend/src/pages/ChatPage.tsx`。
+2. 修改 `frontend/src/styles/chat.css`。
+3. 执行 `pnpm build`。
+4. 点击 `开启新对话`。
+5. 确认 Network 里有 `POST /api/sessions`。
+6. 刷新页面，确认新会话还在。
+7. 把构建结果和页面截图发给我。
+
+## 第 28 步：发送问题并展示消息
+
+这一轮只接一个接口：
+
+```txt
+POST /api/sessions/{session_id}/messages
+```
+
+目标：在当前选中的会话里输入问题，点击发送后，后端保存用户问题并生成一条模拟 AI 回复，前端把这个会话里的消息展示出来。
+
+暂时不做：
+
+- 不渲染 AI 回复里的表格
+- 不渲染统计信息
+- 不渲染柱状图
+- 不做“数据有误”反馈
+
+原因：这一步先跑通“用户输入 -> 后端生成回复 -> 前端展示消息”的主链路。结构化数据展示留到下一步，否则一次改动太大。
+
+### 28.1 确认已有 API 方法
+
+打开：
+
+```txt
+frontend/src/api/chat.ts
+```
+
+确认里面有：
+
+```ts
+export function sendMessage(sessionId: number, content: string) {
+  return http.post<ChatSession>(`/api/sessions/${sessionId}/messages`, {
+    role: 'user',
+    content,
+  })
+}
+```
+
+如果你的文件里已经有 `sendMessage`，这一步不用改。
+
+解释：
+
+- `sessionId`：告诉后端这条消息属于哪个会话。
+- `content`：用户输入的问题。
+- `role: 'user'`：告诉后端这是用户发出的消息。
+
+后端会做两件事：
+
+1. 保存一条用户消息。
+2. 再生成并保存一条 `assistant` 消息。
+
+所以这个接口返回的不是单条消息，而是更新后的整个 `ChatSession`。
+
+### 28.2 修改 `ChatPage.tsx` 导入
+
+打开：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+把顶部导入改成：
+
+```tsx
+import { useMemo, useState } from 'react'
+import { Plus, Send } from 'lucide-react'
+import { createSession, getSessions, sendMessage } from '../api/chat'
+import type { ChatSession } from '../api/types'
+import { useAsyncData } from '../hooks/useAsyncData'
+import { toAsyncResult } from '../utils/asyncResult'
+```
+
+解释：
+
+- `sendMessage` 是这一步要调用的新接口方法。
+
+### 28.3 增加输入框和发送状态
+
+在：
+
+```tsx
+const [creatingSession, setCreatingSession] = useState(false)
+```
+
+下面增加：
+
+```tsx
+const [question, setQuestion] = useState('')
+const [sendingMessage, setSendingMessage] = useState(false)
+```
+
+解释：
+
+- `question`：输入框当前内容。
+- `sendingMessage`：是否正在发送。
+
+这就是一个标准受控输入框：
+
+- 输入框的 `value` 来自 React state。
+- 用户输入时通过 `onChange` 更新 state。
+
+### 28.4 增加 messages 派生数据
+
+在：
+
+```tsx
+const pageTitle = activeSession?.title ?? defaultTitle
+```
+
+下面增加：
+
+```tsx
+const messages = useMemo(() => {
+  return [...(activeSession?.messages ?? [])].sort((prev, next) => prev.id - next.id)
+}, [activeSession])
+```
+
+解释：
+
+- `activeSession?.messages ?? []`：如果当前有选中会话，就取它的消息；否则用空数组。
+- `[...数组]`：复制一份数组，避免直接修改原数组。
+- `.sort((prev, next) => prev.id - next.id)`：按消息 id 从小到大排序。
+
+为什么要复制后再排序：
+
+- `sort` 会修改原数组。
+- React state 里的数据不要直接改。
+- 所以先 `[...messages]` 复制，再排序。
+
+前端类比：
+
+```ts
+const sortedList = [...list].sort(...)
+```
+
+这是你平时处理列表排序时很常见的写法。
+
+### 28.5 增加发送函数
+
+在 `handleCreateSession` 下面增加：
+
+```tsx
+const handleSendMessage = async (event: FormEvent<HTMLFormElement>) => {
+  event.preventDefault()
+
+  const content = question.trim()
+
+  if (!activeSessionId || !content || sendingMessage) {
+    return
+  }
+
+  setSendingMessage(true)
+  setError(null)
+
+  const result = await toAsyncResult(sendMessage(activeSessionId, content))
+
+  if (result.ok === false) {
+    setError(result.error)
+    setSendingMessage(false)
+    return
+  }
+
+  setSessions(currentSessions => [
+    result.data,
+    ...currentSessions.filter(session => session.id !== result.data.id),
+  ])
+  setSelectedSessionId(result.data.id)
+  setQuestion('')
+  setSendingMessage(false)
+}
+```
+
+逐句解释：
+
+```tsx
+event.preventDefault()
+```
+
+阻止表单默认刷新页面。
+
+如果不写，点击发送按钮时浏览器可能会按传统 HTML 表单行为提交并刷新页面。
+
+```tsx
+const content = question.trim()
+```
+
+去掉输入内容前后的空格。
+
+```tsx
+if (!activeSessionId || !content || sendingMessage) {
+  return
+}
+```
+
+三种情况不发送：
+
+- 当前没有选中会话。
+- 输入内容为空。
+- 已经在发送中，避免重复点击。
+
+```tsx
+const result = await toAsyncResult(sendMessage(activeSessionId, content))
+```
+
+调用后端发送消息接口。
+
+这里后端会返回更新后的整个会话，里面包含用户消息和 AI 回复消息。
+
+```tsx
+setSessions(currentSessions => [
+  result.data,
+  ...currentSessions.filter(session => session.id !== result.data.id),
+])
+```
+
+把更新后的会话放到左侧列表最前面，并删除旧的同 id 会话。
+
+为什么不是简单 `map`：
+
+- 发送消息后，这个会话的 `updated_at` 会更新。
+- 最近更新的会话应该排到最前面。
+- 所以用 `[result.data, ...其他会话]`。
+
+```tsx
+setQuestion('')
+```
+
+发送成功后清空输入框。
+
+### 28.6 替换消息展示区域
+
+把原来的：
+
+```tsx
+<div className="chat-content">
+  <article className="assistant-card">
+    <h2>{pageTitle}</h2>
+    <p>
+      {activeSession
+        ? '已选中该历史对话。下一步会展示这个会话里的消息。'
+        : '当前还没有历史对话。下一步会实现开启新对话。'}
+    </p>
+  </article>
+</div>
+```
+
+替换成：
+
+```tsx
+<div className="chat-content">
+  {messages.length === 0 && (
+    <article className="assistant-card">
+      <h2>{pageTitle}</h2>
+      <p>
+        {activeSession
+          ? '当前会话还没有消息，请在下方输入问题。'
+          : '当前还没有历史对话，请先开启新对话。'}
+      </p>
+    </article>
+  )}
+
+  {messages.map(message => (
+    <article
+      className={message.role === 'user' ? 'message-row user' : 'message-row assistant'}
+      key={message.id}
+    >
+      <div className="message-bubble">
+        <strong>{message.role === 'user' ? '你' : 'AI'}</strong>
+        <p>{message.content}</p>
+      </div>
+    </article>
+  ))}
+</div>
+```
+
+解释：
+
+- 没有消息时显示提示卡片。
+- 有消息时遍历 `messages`。
+- `role === 'user'` 的消息靠右。
+- `role === 'assistant'` 的消息靠左。
+
+### 28.7 替换输入框表单
+
+把原来的：
+
+```tsx
+<form className="chat-input-bar">
+  <input placeholder="请写下您的想法..." />
+  <button type="button" aria-label="发送">
+    <Send size={18} />
+  </button>
+</form>
+```
+
+替换成：
+
+```tsx
+<form className="chat-input-bar" onSubmit={handleSendMessage}>
+  <input
+    value={question}
+    disabled={!activeSessionId || sendingMessage}
+    placeholder={activeSessionId ? '请写下您的想法...' : '请先开启新对话'}
+    onChange={event => setQuestion(event.target.value)}
+  />
+  <button type="submit" disabled={!activeSessionId || !question.trim() || sendingMessage} aria-label="发送">
+    <Send size={18} />
+  </button>
+</form>
+```
+
+解释：
+
+- `onSubmit={handleSendMessage}`：表单提交时发送消息。
+- `value={question}`：输入框内容由 React state 控制。
+- `onChange`：用户输入时更新 `question`。
+- 没有会话时禁用输入框。
+- 输入为空时禁用发送按钮。
+
+### 28.8 补充消息样式
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+在 `.assistant-card p` 后面追加：
+
+```css
+.message-row {
+  max-width: 1068px;
+  display: flex;
+  margin-bottom: 14px;
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.message-row.assistant {
+  justify-content: flex-start;
+}
+
+.message-bubble {
+  max-width: 68%;
+  border: 1px solid #e5eaf2;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.05);
+}
+
+.message-row.user .message-bubble {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.message-bubble strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.message-bubble p {
+  margin: 0;
+  line-height: 1.7;
+}
+```
+
+在 `.chat-input-bar button` 后面追加：
+
+```css
+.chat-input-bar input:disabled,
+.chat-input-bar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+```
+
+### 28.9 验收方式
+
+后端和前端都保持启动。
+
+前端构建检查：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+浏览器打开：
+
+```txt
+http://localhost:5173/chat
+```
+
+操作：
+
+1. 选中一条会话。
+2. 在输入框输入：
+
+```txt
+经营单元收入&完成率分析
+```
+
+3. 点击发送按钮。
+
+Network 里应该看到：
+
+```txt
+POST /api/sessions/{session_id}/messages
+```
+
+预期：
+
+1. 状态码是 `200`。
+2. 页面出现一条用户消息。
+3. 页面出现一条 AI 回复消息。
+4. 输入框发送成功后被清空。
+5. 刷新页面后，消息仍然存在。
+
+为什么刷新后消息仍然存在：
+
+- 后端把用户消息和 AI 回复都写进了 `chat_messages` 表。
+- 刷新页面后，`GET /api/sessions` 会把会话和消息一起查出来。
+
+你现在只做：
+
+1. 修改 `frontend/src/pages/ChatPage.tsx`。
+2. 修改 `frontend/src/styles/chat.css`。
+3. 执行 `pnpm build`。
+4. 在 `/chat` 页面发送一个问题。
+5. 确认 Network 里有 `POST /api/sessions/{session_id}/messages`。
+6. 刷新页面，确认消息还在。
+7. 把构建结果和页面截图发给我。
+
+## 第 29 步：渲染 AI 结构化回复
+
+这一轮只做前端展示，不新增后端接口。
+
+目标：把 AI 回复里的 `answer_data` 展示出来，包括：
+
+1. 数据表格
+2. 数据统计
+3. 简易柱状图
+4. 下一步问题建议
+
+原因：后端现在返回的 AI 回复不是只有 `content` 文本，还包含 `answer_data`。这类结构化数据正是这个 demo 的亮点，二面可以讲：后端把分析结果组织成 JSON，前端根据 JSON 渲染成表格、统计和图表。
+
+### 29.1 补充 `answer_data` 类型
+
+打开：
+
+```txt
+frontend/src/api/types.ts
+```
+
+在 `// 对话` 下面、`ChatMessage` 上面增加：
+
+```ts
+export type ChatAnswerTableColumn = {
+  key: string
+  label: string
+}
+
+export type ChatAnswerTableRow = Record<string, string | number>
+
+export type ChatAnswerStat = {
+  label: string
+  value: string
+}
+
+export type ChatAnswerChartSeries = {
+  key: string
+  name: string
+  color: string
+}
+
+export type ChatAnswerData = {
+  title: string
+  description: string
+  table: {
+    columns: ChatAnswerTableColumn[]
+    rows: ChatAnswerTableRow[]
+  }
+  stats: ChatAnswerStat[]
+  chart: {
+    type: string
+    title: string
+    x_key: string
+    series: ChatAnswerChartSeries[]
+  }
+  suggestions: string[]
+}
+```
+
+然后把 `ChatMessage` 里的：
+
+```ts
+answer_data: Record<string, unknown> | null
+```
+
+改成：
+
+```ts
+answer_data: ChatAnswerData | null
+```
+
+解释：
+
+- 原来的 `Record<string, unknown>` 太宽泛，前端不知道里面有什么字段。
+- 改成 `ChatAnswerData` 后，TS 能提示 `table`、`stats`、`chart`、`suggestions`。
+- 这更接近真实业务：后端响应结构稳定后，前端应该把类型补准确。
+
+### 29.2 创建 components 目录
+
+创建目录：
+
+```txt
+frontend/src/components
+```
+
+然后创建文件：
+
+```txt
+frontend/src/components/AnswerDataView.tsx
+```
+
+原因：`ChatPage` 已经负责会话列表、输入框、发送消息、选中会话这些页面状态。如果再把表格、统计、图表都写进去，文件会越来越重。
+
+拆成组件后：
+
+- `ChatPage`：负责页面状态和接口动作。
+- `AnswerDataView`：负责展示 AI 回复里的结构化数据。
+
+### 29.3 编写 `AnswerDataView.tsx`
+
+打开：
+
+```txt
+frontend/src/components/AnswerDataView.tsx
+```
+
+写入：
+
+```tsx
+import type { ChatAnswerData } from '../api/types'
+
+type AnswerDataViewProps = {
+  answerData: ChatAnswerData
+  onSuggestionClick: (suggestion: string) => void
+}
+
+const formatCellValue = (value: string | number | undefined) => {
+  if (typeof value === 'number') {
+    return value.toLocaleString('zh-CN')
+  }
+
+  return value ?? '-'
+}
+
+const getChartMaxValue = (answerData: ChatAnswerData) => {
+  const values = answerData.table.rows.flatMap(row =>
+    answerData.chart.series.map(series => Number(row[series.key]) || 0),
+  )
+
+  return Math.max(1, ...values)
+}
+
+const AnswerDataView = ({ answerData, onSuggestionClick }: AnswerDataViewProps) => {
+  const maxValue = getChartMaxValue(answerData)
+
+  return (
+    <div className="answer-data">
+      <section className="answer-section">
+        <h3>数据表格</h3>
+        <div className="answer-table-wrap">
+          <table className="answer-table">
+            <thead>
+              <tr>
+                {answerData.table.columns.map(column => (
+                  <th key={column.key}>{column.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {answerData.table.rows.map((row, rowIndex) => (
+                <tr key={`${row.business_unit ?? rowIndex}`}>
+                  {answerData.table.columns.map(column => (
+                    <td key={column.key}>{formatCellValue(row[column.key])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="answer-section">
+        <h3>数据统计</h3>
+        <ul className="answer-stats">
+          {answerData.stats.map(stat => (
+            <li key={stat.label}>
+              <span>{stat.label}</span>
+              <strong>{stat.value}</strong>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="answer-section">
+        <h3>数据可视化</h3>
+        <p>{answerData.description}</p>
+
+        <div className="mini-chart" aria-label={answerData.chart.title}>
+          <strong>{answerData.chart.title}</strong>
+          <div className="mini-chart-grid">
+            {answerData.table.rows.map((row, rowIndex) => (
+              <div className="mini-chart-group" key={`${row.business_unit ?? rowIndex}`}>
+                <div className="mini-chart-bars">
+                  {answerData.chart.series.map(series => {
+                    const value = Number(row[series.key]) || 0
+                    const height = Math.max(8, Math.round((value / maxValue) * 104))
+
+                    return (
+                      <span
+                        key={series.key}
+                        title={`${series.name}: ${value.toLocaleString('zh-CN')}`}
+                        style={{
+                          height,
+                          backgroundColor: series.color,
+                        }}
+                      />
+                    )
+                  })}
+                </div>
+                <small>{formatCellValue(row[answerData.chart.x_key])}</small>
+              </div>
+            ))}
+          </div>
+
+          <div className="mini-chart-legend">
+            {answerData.chart.series.map(series => (
+              <span key={series.key}>
+                <i style={{ backgroundColor: series.color }} />
+                {series.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="suggestion-list" aria-label="下一步问题建议">
+        {answerData.suggestions.map(suggestion => (
+          <button key={suggestion} type="button" onClick={() => onSuggestionClick(suggestion)}>
+            {suggestion}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export default AnswerDataView
+```
+
+解释：
+
+- `formatCellValue`：表格单元格格式化。数字加千分位，空值显示 `-`。
+- `flatMap`：先遍历每一行，再取出每个图表系列对应的数值，最后拍平成一个数组。
+- `Math.max(1, ...values)`：找最大值，用来计算柱状图高度。放一个 `1` 是为了避免最大值为 `0` 时除以 0。
+- `AnswerDataView` 只负责展示 `answerData`，不请求接口，不改父组件状态。
+- 点击建议问题时，通过 `onSuggestionClick` 把问题交给 `ChatPage` 继续发送。
+
+### 29.4 修改 `ChatPage.tsx` 导入
+
+打开：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+增加导入：
+
+```tsx
+import AnswerDataView from '../components/AnswerDataView'
+```
+
+`ChatPage` 里不需要导入 `ChatAnswerData`，因为这个类型只在 `AnswerDataView` 组件内部使用。
+
+### 29.5 改造发送函数，支持建议问题
+
+把当前的：
+
+```tsx
+const handleSendMessage = async () => {
+  const content = question.trim()
+```
+
+改成：
+
+```tsx
+const handleSendMessage = async (nextQuestion?: string) => {
+  const content = (nextQuestion ?? question).trim()
+```
+
+其他逻辑不变。
+
+解释：
+
+- 正常发送时，不传参数，使用输入框里的 `question`。
+- 点击建议问题时，传入 `suggestion`，直接发送这个建议问题。
+
+### 29.6 在 AI 消息里渲染 `AnswerDataView`
+
+找到当前消息渲染里的：
+
+```tsx
+<div className="message-bubble">
+  <strong>{message.role === 'user' ? '你' : 'AI'}</strong>
+  <p>{message.content}</p>
+</div>
+```
+
+改成：
+
+```tsx
+<div className="message-bubble">
+  <strong>{message.role === 'user' ? '你' : 'AI'}</strong>
+  <p>{message.content}</p>
+
+  {message.role === 'assistant' && message.answer_data && (
+    <AnswerDataView
+      answerData={message.answer_data}
+      onSuggestionClick={suggestion => void handleSendMessage(suggestion)}
+    />
+  )}
+</div>
+```
+
+解释：
+
+- 只有 AI 消息才可能有 `answer_data`。
+- 用户消息只展示文本。
+- `message.answer_data && ...` 是条件渲染，避免空数据时报错。
+
+### 29.7 补充结构化回复样式
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+在文件里追加：
+
+```css
+.message-row.assistant .message-bubble {
+  width: min(100%, 760px);
+  max-width: 82%;
+}
+
+.answer-data {
+  display: grid;
+  gap: 16px;
+  border-top: 1px solid #edf1f6;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.answer-section h3 {
+  margin: 0 0 10px;
+  color: #18365f;
+  font-size: 15px;
+}
+
+.answer-section p {
+  margin: 0 0 8px;
+  color: #667085;
+  font-size: 14px;
+}
+
+.answer-table-wrap {
+  overflow-x: auto;
+}
+
+.answer-table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.answer-table th {
+  background: #f3f6fa;
+  color: #18365f;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 9px 12px;
+  text-align: left;
+}
+
+.answer-table td {
+  border-top: 1px solid #e5eaf2;
+  color: #344054;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+
+.answer-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.answer-stats li {
+  border: 1px solid #e5eaf2;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 10px 12px;
+}
+
+.answer-stats span {
+  display: block;
+  color: #667085;
+  font-size: 13px;
+}
+
+.answer-stats strong {
+  display: block;
+  margin-top: 4px;
+  color: #111827;
+  font-size: 15px;
+}
+
+.mini-chart {
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 14px 16px;
+}
+
+.mini-chart > strong {
+  display: block;
+  color: #475467;
+  font-size: 13px;
+  text-align: center;
+}
+
+.mini-chart-grid {
+  min-height: 146px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(80px, 1fr));
+  align-items: end;
+  gap: 14px;
+  padding-top: 14px;
+}
+
+.mini-chart-group {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.mini-chart-bars {
+  height: 112px;
+  display: flex;
+  align-items: end;
+  gap: 6px;
+}
+
+.mini-chart-bars span {
+  width: 12px;
+  border-radius: 4px 4px 0 0;
+}
+
+.mini-chart-group small {
+  max-width: 100%;
+  overflow: hidden;
+  color: #667085;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-chart-legend,
+.suggestion-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.mini-chart-legend {
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.mini-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.mini-chart-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.suggestion-list button {
+  border: 0;
+  border-radius: 999px;
+  background: #eef3f9;
+  color: #475467;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.suggestion-list button:hover {
+  color: #2563eb;
+  background: #dbeafe;
+}
+```
+
+### 29.8 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+打开：
+
+```txt
+http://localhost:5173/chat
+```
+
+发送：
+
+```txt
+经营单元收入&完成率分析
+```
+
+预期：
+
+1. AI 回复下面显示数据表格。
+2. 显示数据统计。
+3. 显示简易柱状图。
+4. 显示下一步问题建议。
+5. 点击建议问题，会继续发送一条新问题。
+
+你现在只做：
+
+1. 修改 `frontend/src/api/types.ts`。
+2. 创建 `frontend/src/components/AnswerDataView.tsx`。
+3. 修改 `frontend/src/pages/ChatPage.tsx`，导入并使用 `AnswerDataView`。
+4. 修改 `frontend/src/styles/chat.css`。
+5. 执行 `pnpm build`。
+6. 在页面发送问题并截图给我。
+
+## 第 30 步：从 AI 回复创建反馈
+
+这一轮接智能问数页和回复校对页的业务闭环。
+
+目标：在 AI 回复下面加一个 `数据有误` 按钮。点击后调用：
+
+```txt
+POST /api/feedbacks
+```
+
+创建成功后，去 `/feedbacks` 页面能看到一条 `待处理` 反馈。
+
+原因：这个功能能把两个页面串起来：
+
+- 智能问数页：用户发现 AI 回复有误。
+- 回复校对页：运营/管理员处理这条反馈。
+
+这在二面里很好讲，因为它不是孤立页面，而是一个真实业务流。
+
+### 30.1 确认已有 API 方法
+
+打开：
+
+```txt
+frontend/src/api/feedback.ts
+```
+
+确认里面有：
+
+```ts
+export const createFeedback = (payload: FeedbackCreatePayload) => {
+  return http.post<Feedback>('/api/feedbacks', payload)
+}
+```
+
+如果已经有，这一步不用改。
+
+### 30.2 修改 `ChatPage.tsx` 导入
+
+打开：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+把图标导入：
+
+```tsx
+import { Plus, Send } from 'lucide-react'
+```
+
+改成：
+
+```tsx
+import { ClipboardCheck, Plus, Send } from 'lucide-react'
+```
+
+增加反馈 API 导入：
+
+```tsx
+import { createFeedback } from '../api/feedback'
+```
+
+### 30.3 增加反馈状态
+
+在：
+
+```tsx
+const [sendingMessage, setSendingMessage] = useState(false)
+```
+
+下面增加：
+
+```tsx
+const [feedbackMessageId, setFeedbackMessageId] = useState<number | null>(null)
+const [feedbackDoneIds, setFeedbackDoneIds] = useState<number[]>([])
+```
+
+解释：
+
+- `feedbackMessageId`：当前正在提交反馈的消息 id，用来禁用按钮。
+- `feedbackDoneIds`：已经提交过反馈的消息 id，用来显示 `已反馈`，避免重复提交。
+
+### 30.4 增加查找上一条用户问题的函数
+
+在 `messages` 下面增加：
+
+```tsx
+const getPreviousUserQuestion = (messageIndex: number) => {
+  const previousUserMessage = [...messages]
+    .slice(0, messageIndex)
+    .reverse()
+    .find(message => message.role === 'user')
+
+  return previousUserMessage?.content ?? pageTitle
+}
+```
+
+解释：
+
+- AI 回复本身只知道它自己的 `content`。
+- 创建反馈时，后端需要保存 `question` 和 `ai_answer`。
+- 所以我们从当前 AI 消息前面往回找最近一条用户消息，把它当成问题。
+
+这里用到几个数组方法：
+
+```ts
+slice(0, messageIndex)
+```
+
+取当前 AI 消息之前的所有消息。
+
+```ts
+reverse()
+```
+
+倒过来，从最近的消息开始找。
+
+```ts
+find(message => message.role === 'user')
+```
+
+找到最近一条用户消息。
+
+### 30.5 增加创建反馈函数
+
+在 `handleSendMessage` 下面增加：
+
+```tsx
+const handleCreateFeedback = async (messageId: number, messageIndex: number, aiAnswer: string) => {
+  if (feedbackDoneIds.includes(messageId) || feedbackMessageId === messageId) {
+    return
+  }
+
+  setFeedbackMessageId(messageId)
+  setError(null)
+
+  const result = await toAsyncResult(
+    createFeedback({
+      user_name: '管理员',
+      question: getPreviousUserQuestion(messageIndex),
+      ai_answer: aiAnswer,
+      message_id: messageId,
+    }),
+  )
+
+  if (result.ok === false) {
+    setError(result.error)
+    setFeedbackMessageId(null)
+    return
+  }
+
+  setFeedbackDoneIds(currentIds => [...currentIds, messageId])
+  setFeedbackMessageId(null)
+}
+```
+
+解释：
+
+```tsx
+feedbackDoneIds.includes(messageId)
+```
+
+表示这条 AI 消息已经提交过反馈，不再重复提交。
+
+```tsx
+feedbackMessageId === messageId
+```
+
+表示这条消息正在提交中，也不重复提交。
+
+```tsx
+createFeedback({
+  user_name: '管理员',
+  question: getPreviousUserQuestion(messageIndex),
+  ai_answer: aiAnswer,
+  message_id: messageId,
+})
+```
+
+这里对应后端 `feedbacks` 表：
+
+- `user_name`：反馈人，demo 里先写死 `管理员`。
+- `question`：用户原始问题。
+- `ai_answer`：AI 回复摘要。
+- `message_id`：关联到哪条 AI 消息。
+
+### 30.6 修改消息 map，拿到 index
+
+把：
+
+```tsx
+{messages.map(message => (
+```
+
+改成：
+
+```tsx
+{messages.map((message, index) => (
+```
+
+原因：创建反馈时要根据当前 AI 消息位置，往前找最近一条用户问题。
+
+### 30.7 在 AI 消息下面加反馈按钮
+
+在：
+
+```tsx
+{message.role === 'assistant' && message.answer_data && (
+  <AnswerDataView
+    answerData={message.answer_data}
+    onSuggestionClick={suggestion => void handleSendMessage(suggestion)}
+  />
+)}
+```
+
+下面增加：
+
+```tsx
+{message.role === 'assistant' && (
+  <div className="message-actions">
+    <button
+      type="button"
+      disabled={feedbackMessageId === message.id || feedbackDoneIds.includes(message.id)}
+      onClick={() => void handleCreateFeedback(message.id, index, message.content)}
+    >
+      <ClipboardCheck size={16} />
+      {feedbackDoneIds.includes(message.id) ? '已反馈' : '数据有误'}
+    </button>
+  </div>
+)}
+```
+
+解释：
+
+- 只有 AI 消息显示 `数据有误`。
+- 用户消息不显示。
+- 提交中或者已提交后禁用按钮。
+
+### 30.8 补充样式
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+追加：
+
+```css
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid #edf1f6;
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.message-actions button {
+  border: 0;
+  border-radius: 999px;
+  background: #eef3f9;
+  color: #475467;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.message-actions button:hover {
+  color: #2563eb;
+  background: #dbeafe;
+}
+
+.message-actions button:disabled {
+  cursor: not-allowed;
+  color: #0f9f6e;
+  background: #dff8ec;
+}
+```
+
+### 30.9 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+打开：
+
+```txt
+http://localhost:5173/chat
+```
+
+操作：
+
+1. 找到一条 AI 回复。
+2. 点击 `数据有误`。
+3. Network 里确认有：
+
+```txt
+POST /api/feedbacks
+```
+
+4. 打开：
+
+```txt
+http://localhost:5173/feedbacks
+```
+
+预期：
+
+1. `POST /api/feedbacks` 状态码是 `200`。
+2. 按钮变成 `已反馈`。
+3. 回复校对页出现一条新的 `待处理` 数据。
+
+你现在只做：
+
+1. 修改 `frontend/src/pages/ChatPage.tsx`。
+2. 修改 `frontend/src/styles/chat.css`。
+3. 执行 `pnpm build`。
+4. 点击一条 AI 回复的 `数据有误`。
+5. 去 `/feedbacks` 验证数据出现。
+6. 把截图发给我。
+
+## 第 31 步：按 `demo.html` 对齐回复校对
+
+原型里的回复校对页有两个关键点：
+
+1. 表格顶部有筛选区：搜索问题、搜索用户、状态筛选、总条数。
+2. 处理弹窗不是简单备注框，而是左右两栏：
+   - 左侧展示用户提问和 AI 回复。
+   - 右侧可以选择处理状态，并填写处理备注。
+
+所以这一轮要做：
+
+- `GET /api/feedbacks` 增加筛选和分页参数。
+- 表格增加操作列。
+- 点击处理打开弹窗。
+- 弹窗里可以选择 `待处理` 或 `已处理`。
+- 保存时调用 `PATCH /api/feedbacks/{feedback_id}`。
+
+### 31.1 状态值映射
+
+后端状态是英文：
+
+```txt
+pending
+resolved
+```
+
+页面显示是中文：
+
+```txt
+待处理
+已处理
+```
+
+所以前端要做映射：
+
+```tsx
+const statusOptions = [
+  { label: '全部状态', value: '' },
+  { label: '待处理', value: 'pending' },
+  { label: '已处理', value: 'resolved' },
+] as const
+```
+
+解释：
+
+- UI 上给用户看中文。
+- 接口里传英文。
+- 这样不会把展示文案和数据库状态混在一起。
+
+### 31.2 修改 `FeedbackReviewPage.tsx` 导入
+
+打开：
+
+```txt
+frontend/src/pages/FeedbackReviewPage.tsx
+```
+
+顶部改成：
+
+```tsx
+import { useMemo, useState } from 'react'
+import { getFeedbacks, updateFeedback } from '../api/feedback'
+import type { Feedback, FeedbackListResponse, FeedbackStatus } from '../api/types'
+import { useAsyncData } from '../hooks/useAsyncData'
+import { toAsyncResult } from '../utils/asyncResult'
+```
+
+### 31.3 增加筛选状态
+
+在 `initialFeedbackResponse` 下面增加：
+
+```tsx
+const pageSize = 10
+
+const statusOptions = [
+  { label: '全部状态', value: '' },
+  { label: '待处理', value: 'pending' },
+  { label: '已处理', value: 'resolved' },
+] as const
+```
+
+在组件里增加：
+
+```tsx
+const [questionKeyword, setQuestionKeyword] = useState('')
+const [userKeyword, setUserKeyword] = useState('')
+const [statusFilter, setStatusFilter] = useState<FeedbackStatus | ''>('')
+const [page, setPage] = useState(1)
+```
+
+解释：
+
+- `questionKeyword` 对应原型里的“搜索问题...”。
+- `userKeyword` 对应原型里的“搜索用户...”。
+- `statusFilter` 对应原型里的状态下拉。
+- `page` 对应分页。
+
+### 31.4 让列表请求带筛选参数
+
+把原来的：
+
+```tsx
+const loadInitialFeedbacks = () => {
+  return getFeedbacks({
+    page: 1,
+    page_size: 10,
+  })
+}
+```
+
+删掉。
+
+在组件里增加：
+
+```tsx
+const loadFeedbacks = useMemo(() => {
+  return () =>
+    getFeedbacks({
+      question: questionKeyword.trim() || undefined,
+      user: userKeyword.trim() || undefined,
+      status: statusFilter || undefined,
+      page,
+      page_size: pageSize,
+    })
+}, [page, questionKeyword, statusFilter, userKeyword])
+```
+
+然后把：
+
+```tsx
+const { data, loading, error } = useAsyncData(loadInitialFeedbacks, initialFeedbackResponse)
+```
+
+改成：
+
+```tsx
+const {
+  data,
+  setData,
+  loading,
+  error,
+  setError,
+} = useAsyncData(loadFeedbacks, initialFeedbackResponse)
+```
+
+说明：
+
+- 筛选条件变化时，`loadFeedbacks` 会变化。
+- `useAsyncData` 会重新请求列表。
+- 这就对应原型里的输入框 `oninput` 和状态筛选 `onchange`。
+- 但是不要用 `loading` 把整块表格卸载掉，否则输入筛选条件时页面会闪动。
+
+页面里不要再写这种结构：
+
+```tsx
+{loading && <p className="state-text">加载中...</p>}
+{error && <p className="state-text error">{error}</p>}
+
+{!loading && !error && (
+  <section className="table-card">
+    ...
+  </section>
+)}
+```
+
+原因：
+
+- 每次输入搜索词，`loading` 会变成 `true`。
+- `!loading && ...` 会让整块表格先消失。
+- 请求完成后表格再出现，所以你看到的是整个屏幕闪动。
+
+改成：
+
+```tsx
+{error && <p className="state-text error">{error}</p>}
+
+<section className="table-card" aria-label="回复校对列表">
+  ...
+</section>
+```
+
+也就是说：
+
+- 表格容器始终存在。
+- 筛选时保留当前表格内容。
+- loading 状态只在表格内部局部提示。
+
+### 31.5 增加弹窗状态
+
+在组件里增加：
+
+```tsx
+const [activeFeedback, setActiveFeedback] = useState<Feedback | null>(null)
+const [statusDraft, setStatusDraft] = useState<FeedbackStatus>('pending')
+const [remark, setRemark] = useState('')
+const [submitting, setSubmitting] = useState(false)
+```
+
+解释：
+
+- `activeFeedback`：当前正在处理哪条反馈。
+- `statusDraft`：弹窗里选择的处理状态。
+- `remark`：处理备注。
+- `submitting`：保存中状态。
+
+### 31.6 打开弹窗时回填原数据
+
+增加：
+
+```tsx
+const openHandleDialog = (feedback: Feedback) => {
+  setActiveFeedback(feedback)
+  setStatusDraft(feedback.status === 'resolved' ? 'resolved' : 'pending')
+  setRemark(feedback.remark ?? '')
+  setError(null)
+}
+
+const closeHandleDialog = () => {
+  if (submitting) {
+    return
+  }
+
+  setActiveFeedback(null)
+  setRemark('')
+  setStatusDraft('pending')
+}
+```
+
+这和原型里的逻辑一致：
+
+```js
+remarkFeedbackText.value = r.remark || ''
+remarkFeedbackStatus.value = r.status || '待处理'
+```
+
+### 31.7 保存时使用弹窗选择的状态
+
+增加：
+
+```tsx
+const handleSubmitFeedback = async () => {
+  if (!activeFeedback || submitting) {
+    return
+  }
+
+  setSubmitting(true)
+  setError(null)
+
+  const result = await toAsyncResult(
+    updateFeedback(activeFeedback.id, {
+      status: statusDraft,
+      remark: remark.trim(),
+    }),
+  )
+
+  if (result.ok === false) {
+    setError(result.error)
+    setSubmitting(false)
+    return
+  }
+
+  setData(currentData => ({
+    ...currentData,
+    items: currentData.items.map(item => (item.id === result.data.id ? result.data : item)),
+  }))
+
+  setActiveFeedback(null)
+  setRemark('')
+  setStatusDraft('pending')
+  setSubmitting(false)
+}
+```
+
+重点：这里不能固定写：
+
+```tsx
+status: 'resolved'
+```
+
+因为原型允许在弹窗里选择 `待处理` 或 `已处理`。
+
+### 31.8 表格顶部筛选区
+
+把表格 toolbar 改成类似：
+
+```tsx
+<div className="feedback-panel-header">
+  <div>
+    <strong>回复校对</strong>
+    <span>此列表为用户标注AI回复数据有误的信息数据</span>
+  </div>
+
+  <div className="feedback-filters">
+    <input
+      value={questionKeyword}
+      placeholder="搜索问题..."
+      onChange={event => {
+        setPage(1)
+        setQuestionKeyword(event.target.value)
+      }}
+    />
+    <input
+      value={userKeyword}
+      placeholder="搜索用户..."
+      onChange={event => {
+        setPage(1)
+        setUserKeyword(event.target.value)
+      }}
+    />
+    <select
+      value={statusFilter}
+      onChange={event => {
+        setPage(1)
+        setStatusFilter(event.target.value as FeedbackStatus | '')
+      }}
+    >
+      {statusOptions.map(option => (
+        <option key={option.value || 'all'} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+    <span className="table-count">{loading ? '更新中...' : `共 ${total} 条`}</span>
+  </div>
+</div>
+```
+
+这对应原型里的：
+
+- 搜索问题
+- 搜索用户
+- 全部状态 / 待处理 / 已处理
+- 共 N 条
+
+### 31.9 表格列要对齐原型
+
+表格列应该是：
+
+```txt
+序号 / 用户 / 问题 / 反馈时间 / 状态 / 操作
+```
+
+`colgroup` 增加操作列：
+
+```tsx
+<col className="feedback-col-action" />
+```
+
+表头增加：
+
+```tsx
+<th>操作</th>
+```
+
+每行增加：
+
+```tsx
+<td className="table-action">
+  <button type="button" onClick={() => openHandleDialog(item)}>
+    处理
+  </button>
+</td>
+```
+
+注意：原型里即使是已处理，也还是显示“处理”，点击后可以查看/修改备注和状态。所以这里不要禁用已处理行。
+
+空数据：
+
+```tsx
+{loading && feedbacks.length === 0 && (
+  <tr>
+    <td className="empty-cell" colSpan={6}>
+      加载中...
+    </td>
+  </tr>
+)}
+
+{!loading && feedbacks.length === 0 && (
+  <tr>
+    <td className="empty-cell" colSpan={6}>
+      暂无反馈数据
+    </td>
+  </tr>
+)}
+```
+
+如果 `loading === true` 但 `feedbacks.length > 0`，就继续显示当前表格数据，只在右上角显示 `更新中...`。
+
+这样筛选时只会局部更新表格内容，不会整屏闪动。
+
+### 31.10 分页
+
+在表格下面加：
+
+```tsx
+const totalPages = Math.max(1, Math.ceil(total / pageSize))
+```
+
+渲染：
+
+```tsx
+<div className="feedback-pagination">
+  <span>共 {total} 条，每页 {pageSize} 条</span>
+  <div>
+    <button type="button" disabled={page <= 1} onClick={() => setPage(current => current - 1)}>
+      上一页
+    </button>
+    <span>{page} / {totalPages}</span>
+    <button
+      type="button"
+      disabled={page >= totalPages}
+      onClick={() => setPage(current => current + 1)}
+    >
+      下一页
+    </button>
+  </div>
+</div>
+```
+
+原型里有每页条数选择和页码按钮。我们这里先固定每页 10 条，保留分页能力，复杂度更适合当前 demo。
+
+### 31.11 弹窗结构按原型左右两栏
+
+弹窗内容用这个结构：
+
+```tsx
+{activeFeedback && (
+  <div className="feedback-modal-backdrop" onClick={closeHandleDialog}>
+    <section
+      className="feedback-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="反馈处理"
+      onClick={event => event.stopPropagation()}
+    >
+      <header>
+        <h2>反馈处理</h2>
+        <button type="button" disabled={submitting} onClick={closeHandleDialog}>
+          关闭
+        </button>
+      </header>
+
+      <div className="feedback-modal-body two-column">
+        <div className="feedback-preview">
+          <label>
+            用户提问
+            <p>{activeFeedback.question}</p>
+          </label>
+
+          <label>
+            AI回复
+            <p className="ai-reply">{activeFeedback.ai_answer || '（暂无AI回复数据）'}</p>
+          </label>
+        </div>
+
+        <div className="feedback-form">
+          <label>
+            处理状态
+            <select
+              value={statusDraft}
+              onChange={event => setStatusDraft(event.target.value as FeedbackStatus)}
+            >
+              <option value="pending">待处理</option>
+              <option value="resolved">已处理</option>
+            </select>
+          </label>
+
+          <label>
+            处理备注
+            <textarea
+              value={remark}
+              placeholder="请填写处理备注..."
+              onChange={event => setRemark(event.target.value)}
+            />
+          </label>
+        </div>
+      </div>
+
+      <footer>
+        <button type="button" disabled={submitting} onClick={closeHandleDialog}>
+          取消
+        </button>
+        <button type="button" disabled={submitting} onClick={() => void handleSubmitFeedback()}>
+          {submitting ? '保存中...' : '确认'}
+        </button>
+      </footer>
+    </section>
+  </div>
+)}
+```
+
+这里对齐原型：
+
+- 弹窗标题：`反馈处理`
+- 左侧：`用户提问`、`AI回复`
+- 右侧：`处理状态`、`处理备注`
+- 底部：`取消`、`确认`
+- 点击遮罩关闭
+
+### 31.12 样式重点
+
+你的 `feedback.css` 里需要补这些类：
+
+```css
+.feedback-panel-header {
+  border-bottom: 1px solid #e4e9f2;
+  padding: 14px 18px 12px;
+}
+
+.feedback-panel-header > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.feedback-panel-header strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.feedback-panel-header span {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.feedback-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feedback-filters input,
+.feedback-filters select {
+  height: 32px;
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  background: #fff;
+  color: #344054;
+  padding: 0 10px;
+  outline: 0;
+}
+
+.feedback-filters input {
+  width: 180px;
+}
+
+.feedback-filters select {
+  width: 120px;
+}
+
+.feedback-filters .table-count {
+  margin-left: auto;
+}
+
+.feedback-col-action {
+  width: 120px;
+}
+
+.table-action {
+  position: sticky;
+  right: 0;
+  background: #fff;
+  text-align: center;
+  box-shadow: -2px 0 4px rgb(15 23 42 / 4%);
+}
+
+.table-action button {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.feedback-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 12px 18px 16px;
+  color: #8a94a6;
+  font-size: 14px;
+}
+
+.feedback-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feedback-pagination button {
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  background: #fff;
+  color: #475467;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.feedback-pagination button:disabled {
+  cursor: not-allowed;
+  color: #b8c0cc;
+  background: #f5f7fb;
+}
+
+.feedback-modal-body.two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 20px;
+}
+
+.feedback-preview,
+.feedback-form {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.feedback-modal-body label {
+  display: grid;
+  gap: 6px;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.feedback-modal-body p {
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #374151;
+  padding: 10px 12px;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.feedback-modal-body p.ai-reply {
+  border: 1px solid #fde68a;
+  background: #fff8f0;
+  color: #92400e;
+}
+
+.feedback-modal-body select,
+.feedback-modal-body textarea {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fafbfc;
+  color: #344054;
+  font: inherit;
+  outline: 0;
+}
+
+.feedback-modal-body select {
+  height: 36px;
+  padding: 0 10px;
+}
+
+.feedback-modal-body textarea {
+  height: 180px;
+  resize: vertical;
+  padding: 10px;
+}
+```
+
+如果你原来已经有 `.feedback-modal-backdrop`、`.feedback-modal`、`.feedback-modal header/footer` 这些样式，可以保留，只把 body 改成上面这种左右两栏。
+
+### 31.13 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+打开：
+
+```txt
+http://localhost:5173/feedbacks
+```
+
+检查：
+
+1. 顶部有搜索问题、搜索用户、状态筛选。
+2. 表格列是：序号、用户、问题、反馈时间、状态、操作。
+3. 操作列右侧固定，按钮是 `处理`。
+4. 点击处理后，弹窗左侧显示用户提问和 AI 回复。
+5. 弹窗右侧能选择处理状态、填写处理备注。
+6. 保存后调用 `PATCH /api/feedbacks/{id}`。
+7. 刷新后状态和备注仍然存在。
+
+你现在只做：
+
+1. 修改 `frontend/src/pages/FeedbackReviewPage.tsx`。
+2. 修改 `frontend/src/styles/feedback.css`。
+3. 执行 `pnpm build`。
+4. 截图给我。
+
+## 第 32 步：组件化弹窗，并按 `demo.html` 补应用配置弹窗
+
+这一轮处理两件事：
+
+1. 把已有的回复校对处理弹窗拆成组件。
+2. 按 `demo.html` 补应用配置页里的两个配置弹窗。
+
+只补原型里已有的两个应用配置弹窗：
+
+1. `对话开场白`
+2. `常问设置`
+
+不做：
+
+- 不新增模型配置页。
+- 不给语音能力加额外交互。
+- 不新增 `demo.html` 里没有的功能。
+
+原因：`demo.html` 里应用配置页的齿轮行为是：
+
+- `对话开场白`：打开开场白配置弹窗。
+- `模型配置`：跳转到单独的模型配置页。
+- `常问设置`：打开常问设置弹窗。
+
+这次任务只要求三个页面，所以不新增第四个模型配置页。
+
+### 32.1 为什么弹窗要拆组件
+
+页面组件应该主要负责：
+
+- 拉取数据。
+- 保存状态。
+- 调接口。
+- 决定显示哪个弹窗。
+
+弹窗组件应该主要负责：
+
+- 弹窗标题。
+- 表单结构。
+- 按钮区域。
+- 输入框、下拉框、文本域这些 UI。
+
+前端类比：
+
+- `AppConfigPage.tsx` 像页面容器。
+- `GreetingConfigModal.tsx` 像一个业务表单组件。
+- `AppModal.tsx` 像通用 Dialog 组件。
+
+这样做的好处：
+
+- 页面 JSX 不会越来越长。
+- 回复校对和应用配置可以共用同一个弹窗壳。
+- 二面讲代码时能说清楚“通用组件”和“业务组件”的边界。
+
+### 32.2 新增通用弹窗组件
+
+创建：
+
+```txt
+frontend/src/components/AppModal.tsx
+```
+
+作用：
+
+- 统一弹窗遮罩。
+- 统一标题栏。
+- 统一底部按钮区域。
+- 统一关闭逻辑。
+
+它不关心业务字段，所以里面不会出现 `feedback`、`greeting`、`threshold` 这些业务词。
+
+### 32.3 新增三个业务弹窗组件
+
+创建：
+
+```txt
+frontend/src/components/FeedbackHandleModal.tsx
+frontend/src/components/GreetingConfigModal.tsx
+frontend/src/components/HotRecommendConfigModal.tsx
+```
+
+分别负责：
+
+- `FeedbackHandleModal.tsx`：回复校对的处理弹窗。
+- `GreetingConfigModal.tsx`：对话开场白配置弹窗。
+- `HotRecommendConfigModal.tsx`：常问设置弹窗。
+
+注意：
+
+- 组件里只处理展示和输入事件。
+- 保存接口仍然放在页面里。
+
+前端类比：
+
+- 这类似表单组件接收 `value`、`onChange`、`onSave`。
+- 组件自己不直接请求接口，页面决定怎么保存。
+
+### 32.4 当前后端配置字段
+
+后端 `app_settings.config` 是 JSON。
+
+对话开场白：
+
+```ts
+code: 'greeting'
+config: {
+  text: string
+  questions: string[]
+}
+```
+
+常问设置：
+
+```ts
+code: 'hot_recommend'
+config: {
+  threshold: number
+}
+```
+
+保存仍然调用已有接口：
+
+```txt
+PATCH /api/settings/{code}
+```
+
+### 32.5 修改应用配置页
+
+修改：
+
+```txt
+frontend/src/pages/AppConfigPage.tsx
+```
+
+增加两个弹窗组件导入：
+
+```tsx
+import GreetingConfigModal from '../components/GreetingConfigModal'
+import HotRecommendConfigModal from '../components/HotRecommendConfigModal'
+```
+
+页面里新增状态：
+
+```tsx
+const [activeConfig, setActiveConfig] = useState<AppSetting | null>(null)
+const [greetingText, setGreetingText] = useState('')
+const [greetingQuestions, setGreetingQuestions] = useState<string[]>([])
+const [hotThreshold, setHotThreshold] = useState(3)
+const [savingConfig, setSavingConfig] = useState(false)
+```
+
+解释：
+
+- `activeConfig`：当前打开哪个配置弹窗。
+- `greetingText`：开场白文案。
+- `greetingQuestions`：开场问题列表。
+- `hotThreshold`：常问阈值。
+- `savingConfig`：保存中状态。
+
+### 32.6 为什么要写读取 config 的小工具
+
+`config` 在前端类型里是：
+
+```ts
+Record<string, unknown>
+```
+
+意思是：
+
+- 它是对象。
+- key 是字符串。
+- value 目前不知道具体类型。
+
+所以不能直接把 `config.text` 当成 `string` 用。
+
+需要先判断：
+
+```tsx
+const getStringConfig = (config: AppSetting['config'], key: string, fallback = '') => {
+  const value = config[key]
+
+  return typeof value === 'string' ? value : fallback
+}
+```
+
+前端类比：
+
+- 这就像你从接口拿到一个 `unknown`，用之前先做类型收窄。
+- 判断后 TypeScript 才知道它确实是 `string`。
+
+### 32.7 页面保存逻辑
+
+保存配置时：
+
+1. 根据当前打开的是 `greeting` 还是 `hot_recommend` 组装 `nextConfig`。
+2. 调用 `updateSetting(activeConfig.code, ...)`。
+3. 用接口返回的新数据更新当前页面列表。
+4. 关闭弹窗。
+
+核心规则：
+
+- `greeting` 保存 `text` 和 `questions`。
+- `hot_recommend` 保存 `threshold`。
+- 保存时保留原来的 `enabled` 状态。
+
+### 32.8 齿轮按钮逻辑
+
+齿轮按钮只打开这两个弹窗：
+
+```tsx
+onClick={() => openConfigModal(item)}
+```
+
+`openConfigModal` 内部会判断：
+
+```tsx
+if (item.code !== 'greeting' && item.code !== 'hot_recommend') {
+  return
+}
+```
+
+所以：
+
+- 点击 `对话开场白` 齿轮会打开弹窗。
+- 点击 `常问设置` 齿轮会打开弹窗。
+- 点击 `模型配置` 齿轮不会新增第四页。
+
+### 32.9 修改回复校对页
+
+修改：
+
+```txt
+frontend/src/pages/FeedbackReviewPage.tsx
+```
+
+把页面里的内联弹窗 JSX 替换成：
+
+```tsx
+{activeFeedback && (
+  <FeedbackHandleModal
+    feedback={activeFeedback}
+    status={statusDraft}
+    remark={remark}
+    submitting={submitting}
+    onStatusChange={setStatusDraft}
+    onRemarkChange={setRemark}
+    onClose={closeHandleDialog}
+    onConfirm={() => void handleSubmitFeedback()}
+  />
+)}
+```
+
+解释：
+
+- `FeedbackReviewPage.tsx` 继续负责保存接口。
+- `FeedbackHandleModal.tsx` 只负责弹窗 UI。
+- 这一步不改变功能，只调整代码结构。
+
+### 32.10 样式拆分
+
+新增：
+
+```txt
+frontend/src/styles/modal.css
+```
+
+放通用弹窗样式：
+
+- `.app-modal-backdrop`
+- `.app-modal`
+- `.app-modal-header`
+- `.app-modal-body`
+- `.app-modal-footer`
+
+继续使用：
+
+```txt
+frontend/src/styles/settings.css
+frontend/src/styles/feedback.css
+```
+
+分别放业务样式：
+
+- `settings.css`：开场问题、常问阈值这些配置弹窗内部样式。
+- `feedback.css`：回复校对弹窗内部两栏布局、AI 回复高亮等样式。
+
+最后在：
+
+```txt
+frontend/src/App.css
+```
+
+引入：
+
+```css
+@import './styles/modal.css';
+```
+
+### 32.11 验收方式
+
+执行：
+
+```bash
+cd ~/Desktop/full-stack-demo/frontend
+pnpm build
+```
+
+打开：
+
+```txt
+http://localhost:5173/settings
+```
+
+检查：
+
+1. `/feedbacks` 点击 `处理`，能打开 `反馈处理` 弹窗。
+2. 回复校对弹窗仍然是左侧问题和 AI 回复，右侧状态和备注。
+3. `/settings` 点击 `对话开场白` 的齿轮，出现 `对话开场白` 弹窗。
+4. 弹窗里有开场白文案、开场问题、添加开场问题、取消、保存。
+5. 保存后 Network 里有 `PATCH /api/settings/greeting`。
+6. 点击 `常问设置` 的齿轮，出现 `常问设置` 弹窗。
+7. 弹窗里有问题频次阈值、取消、保存。
+8. 保存后 Network 里有 `PATCH /api/settings/hot_recommend`。
+9. 刷新页面后配置仍然保留。
+
+你现在只做：
+
+1. 创建 `frontend/src/components/AppModal.tsx`。
+2. 创建三个业务弹窗组件。
+3. 修改 `frontend/src/pages/AppConfigPage.tsx`。
+4. 修改 `frontend/src/pages/FeedbackReviewPage.tsx`。
+5. 创建 `frontend/src/styles/modal.css`。
+6. 修改 `frontend/src/styles/settings.css` 和 `feedback.css`。
+7. 执行 `pnpm build`。
+8. 截图给我。
