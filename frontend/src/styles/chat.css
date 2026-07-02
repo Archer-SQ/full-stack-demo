@@ -140,6 +140,7 @@
 
 .chat-history-pin {
   flex: 0 0 auto;
+  color: #f59e0b;
 }
 
 .chat-history-more-wrap {
@@ -173,13 +174,13 @@
 
 .chat-history-more-button:hover,
 .chat-history-more-wrap:hover .chat-history-more-button,
-.chat-history-more-button[aria-expanded='true'] {
+.chat-history-more-button[aria-expanded="true"] {
   background: #eef3ff;
   color: #2563eb;
 }
 
 .chat-history-more-wrap::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 28px;
   right: -4px;
@@ -188,7 +189,6 @@
   height: 8px;
 }
 
-.chat-history-more-wrap:hover::before,
 .chat-history-item.menu-open .chat-history-more-wrap::before {
   display: block;
 }
@@ -210,7 +210,6 @@
   white-space: nowrap;
 }
 
-.chat-history-more-wrap:hover .chat-history-menu,
 .chat-history-item.menu-open .chat-history-menu {
   display: grid;
 }

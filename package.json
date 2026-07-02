@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "frontend:lint": "pnpm --dir frontend lint",
+    "frontend:test": "pnpm --dir frontend test",
+    "frontend:build": "pnpm --dir frontend build",
+    "frontend:check": "pnpm --dir frontend check",
+    "check": "pnpm frontend:check"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}
