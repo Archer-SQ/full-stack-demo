@@ -13429,3 +13429,3932 @@ http://localhost:5173/settings
 6. 修改 `frontend/src/styles/settings.css` 和 `feedback.css`。
 7. 执行 `pnpm build`。
 8. 截图给我。
+
+### 32.12 当前状态更新
+
+第 32 步代码已经在远程完成。
+
+当前已经有：
+
+```txt
+frontend/src/components/AppModal.tsx
+frontend/src/components/FeedbackHandleModal.tsx
+frontend/src/components/GreetingConfigModal.tsx
+frontend/src/components/HotRecommendConfigModal.tsx
+```
+
+并且已经有三个正式页面：
+
+```txt
+/chat
+/settings
+/feedbacks
+```
+
+当前先不做浏览器人工验收，继续推进下一步。
+
+---
+
+## 第 33 步：补齐 `demo.html` 的左侧主导航和页面外壳
+
+这一轮只做一件事：
+
+```txt
+给 React 应用补一个公共 Layout，让三个页面都有和 demo.html 类似的左侧主导航。
+```
+
+当前 React 已经有三个页面：
+
+```txt
+ChatPage
+AppConfigPage
+FeedbackReviewPage
+```
+
+但是它们现在更像是三个独立页面。
+
+而 `demo.html` 里不是这样。
+
+`demo.html` 的结构更接近：
+
+```txt
+左侧系统菜单
+  - 智能问数
+  - 系统管理
+    - 应用配置
+  - 反馈管理
+    - 回复校对
+
+右侧页面内容
+  - 当前页面自己的内容
+```
+
+所以第 33 步先补公共外壳。
+
+这一步不做：
+
+- 不改后端。
+- 不改接口。
+- 不改弹窗保存逻辑。
+- 不新增模型配置页。
+- 不接真实大模型。
+
+只做：
+
+- 新增公共 layout。
+- 修改路由嵌套。
+- 增加左侧菜单样式。
+- 让 `/chat`、`/settings`、`/feedbacks` 都在同一个系统外壳里展示。
+
+### 33.1 为什么先做 Layout
+
+如果后面直接在三个页面里分别补左侧菜单，会出现重复代码。
+
+例如三个页面都写一遍：
+
+```txt
+智能问数
+应用配置
+回复校对
+```
+
+后面要改菜单文案、图标、选中态，就要改三处。
+
+更好的做法是抽一个公共 layout：
+
+```txt
+Layout
+```
+
+它只负责：
+
+- 左侧主导航。
+- 右侧内容区域。
+- 当前路由高亮。
+
+页面组件继续只负责自己的业务：
+
+- `ChatPage` 负责聊天。
+- `AppConfigPage` 负责配置卡片和配置弹窗。
+- `FeedbackReviewPage` 负责反馈表格和处理弹窗。
+
+前端类比：
+
+```txt
+Layout = 后台系统的页面骨架
+Outlet = 当前路由页面插槽
+```
+
+### 33.2 新建 `frontend/src/layout/index.tsx`
+
+创建文件：
+
+```txt
+frontend/src/layout/index.tsx
+```
+
+注意：
+
+这里不放在：
+
+```txt
+frontend/src/components
+```
+
+而是放在：
+
+```txt
+frontend/src/layout
+```
+
+原因：
+
+- `components` 更适合放页面里的可复用组件，比如弹窗、表格展示、业务小卡片。
+- `layout` 更适合放路由级页面骨架，比如系统外壳、侧边栏、页面插槽。
+
+这个文件用 `index.tsx`，这样导入时可以直接写：
+
+```tsx
+import Layout from './layout'
+```
+
+`Layout` 负责包住多个页面，不是某个页面内部的小组件，所以放在 `layout` 更准确。
+
+写入：
+
+```tsx
+import { Bot, MessageCircleWarning, SlidersHorizontal } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { NavLink, Outlet } from 'react-router-dom'
+
+type NavItem = {
+  label: string
+  path: string
+  Icon: LucideIcon
+}
+
+const primaryNavItems: NavItem[] = [
+  {
+    label: '智能问数',
+    path: '/chat',
+    Icon: Bot,
+  },
+]
+
+const systemNavItems: NavItem[] = [
+  {
+    label: '应用配置',
+    path: '/settings',
+    Icon: SlidersHorizontal,
+  },
+]
+
+const feedbackNavItems: NavItem[] = [
+  {
+    label: '回复校对',
+    path: '/feedbacks',
+    Icon: MessageCircleWarning,
+  },
+]
+
+const renderNavItem = (item: NavItem) => {
+  const { Icon } = item
+
+  return (
+    <NavLink className="side-nav-link" to={item.path} key={item.path}>
+      <Icon size={17} strokeWidth={2.2} />
+      <span>{item.label}</span>
+    </NavLink>
+  )
+}
+
+const Layout = () => {
+  return (
+    <div className="app-layout">
+      <aside className="side-nav">
+        <div className="side-brand">
+          <div className="side-brand-logo">AI</div>
+          <div>
+            <strong>智能运营平台</strong>
+            <span>Full Stack Demo</span>
+          </div>
+        </div>
+
+        <nav className="side-nav-section" aria-label="主导航">
+          {primaryNavItems.map(renderNavItem)}
+        </nav>
+
+        <nav className="side-nav-section" aria-label="系统管理">
+          <p>系统管理</p>
+          {systemNavItems.map(renderNavItem)}
+        </nav>
+
+        <nav className="side-nav-section" aria-label="反馈管理">
+          <p>反馈管理</p>
+          {feedbackNavItems.map(renderNavItem)}
+        </nav>
+      </aside>
+
+      <section className="app-layout-content">
+        <Outlet />
+      </section>
+    </div>
+  )
+}
+
+export default Layout
+```
+
+这里重点理解：
+
+```tsx
+NavLink
+```
+
+是 `react-router-dom` 里的导航组件。
+
+它比普通的 `a` 标签更适合 React 路由。
+
+原因：
+
+- 点击后不会整页刷新。
+- 当前地址匹配时会自动带上 `active` class。
+
+例如当前在：
+
+```txt
+/settings
+```
+
+那么：
+
+```tsx
+<NavLink to="/settings" />
+```
+
+最终会带上：
+
+```txt
+active
+```
+
+所以 CSS 里可以写：
+
+```css
+.side-nav-link.active
+```
+
+来控制选中态。
+
+```tsx
+Outlet
+```
+
+表示“子路由页面显示在这里”。
+
+你可以理解成：
+
+```txt
+Layout 负责外框
+Outlet 负责把当前页面塞进右侧内容区
+```
+
+### 33.3 修改 `frontend/src/App.tsx`
+
+打开：
+
+```txt
+frontend/src/App.tsx
+```
+
+把路由改成嵌套路由。
+
+目标结构：
+
+```tsx
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import Layout from './layout'
+import AppConfigPage from './pages/AppConfigPage'
+import FeedbackReviewPage from './pages/FeedbackReviewPage'
+import ChatPage from './pages/ChatPage'
+import './App.css'
+
+const App = () => {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/" element={<Navigate to="/chat" replace />} />
+          <Route path="/settings" element={<AppConfigPage />} />
+          <Route path="/feedbacks" element={<FeedbackReviewPage />} />
+          <Route path="/chat" element={<ChatPage />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default App
+```
+
+这里的变化是：
+
+原来每个页面直接挂在 `Routes` 下面。
+
+现在它们都放进：
+
+```tsx
+<Route element={<Layout />}>
+```
+
+里面。
+
+意思是：
+
+```txt
+这些页面共用 Layout。
+```
+
+### 33.4 修改 `frontend/src/styles/layout.css`
+
+打开：
+
+```txt
+frontend/src/styles/layout.css
+```
+
+在文件顶部补充公共外壳样式：
+
+```css
+.app-layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  background: #f4f6fa;
+  color: #172033;
+}
+
+.side-nav {
+  min-height: 100vh;
+  border-right: 1px solid #dbe3ef;
+  background: #ffffff;
+  padding: 18px 12px;
+  box-sizing: border-box;
+}
+
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 20px;
+  border-bottom: 1px solid #eef2f7;
+  margin-bottom: 16px;
+}
+
+.side-brand-logo {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.side-brand strong,
+.side-brand span {
+  display: block;
+}
+
+.side-brand strong {
+  color: #18365f;
+  font-size: 15px;
+}
+
+.side-brand span {
+  color: #98a2b3;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.side-nav-section {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+
+.side-nav-section p {
+  margin: 0 0 6px;
+  padding: 0 10px;
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.side-nav-link {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  color: #475467;
+  padding: 0 10px;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.side-nav-link:hover {
+  background: #f4f7fb;
+  color: #2563eb;
+}
+
+.side-nav-link.active {
+  background: #e8f0ff;
+  color: #2563eb;
+}
+
+.app-layout-content {
+  min-width: 0;
+}
+```
+
+然后检查原来的：
+
+```css
+.app-page
+```
+
+不要再写：
+
+```css
+min-height: 100vh;
+```
+
+因为现在整屏高度由 `.app-layout` 负责。
+
+可以调整成：
+
+```css
+.app-page {
+  min-height: 100%;
+  background: #f4f6fa;
+  color: #172033;
+  padding: 28px;
+  box-sizing: border-box;
+}
+```
+
+### 33.5 调整 `frontend/src/styles/chat.css`
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+当前 `ChatPage` 自己已经有一列“近30天记录”。
+
+第 33 步加的是更外层的系统主导航。
+
+所以最终结构会变成：
+
+```txt
+系统主导航
+  + 智能问数页面内部的近30天记录
+  + 聊天主区域
+```
+
+这和 `demo.html` 的结构更接近。
+
+检查：
+
+```css
+.chat-page
+```
+
+里面的：
+
+```css
+min-height: 100vh;
+```
+
+这一行暂时保留。
+
+原因：
+
+- `chat-page` 是一个完整的业务工作区。
+- 里面还有自己的左侧历史会话栏。
+- 保留整屏高度可以让聊天区和输入框更稳定。
+
+但要注意：
+
+- 不要把 `.chat-sidebar` 当成系统主导航。
+- `.chat-sidebar` 只是智能问数页面内部的历史记录。
+
+### 33.6 本轮不处理移动端
+
+这次不需要考虑移动端。
+
+原因：
+
+- 当前项目是面试用后台管理 Demo。
+- `demo.html` 本身主要是桌面端后台布局。
+- 第 33 步的目标是先对齐桌面端左侧主导航和页面外壳。
+
+所以本轮不新增：
+
+```css
+@media (...)
+```
+
+先保持桌面端结构清晰。
+
+### 33.7 执行构建
+
+进入前端目录：
+
+```bash
+cd frontend
+```
+
+执行：
+
+```bash
+pnpm build
+```
+
+如果你当前终端没有 `pnpm`，说明 Node 版本管理环境没有加载。
+
+可以先执行：
+
+```bash
+nvm use
+```
+
+或者重新打开一个终端。
+
+### 33.8 本轮验收标准
+
+完成第 33 步后，应该确认：
+
+1. `frontend/src/layout/index.tsx` 已创建。
+2. `frontend/src/App.tsx` 使用嵌套路由和 `Layout`。
+3. `/chat`、`/settings`、`/feedbacks` 都能看到左侧主导航。
+4. 当前路由对应菜单有选中态。
+5. `/chat` 仍然保留“近30天记录”这一列。
+6. `/settings` 和 `/feedbacks` 不再像孤立页面，而是在系统外壳中展示。
+7. `pnpm build` 通过。
+
+你现在只做：
+
+1. 新建 `frontend/src/layout/index.tsx`。
+2. 修改 `frontend/src/App.tsx`。
+3. 修改 `frontend/src/styles/layout.css`。
+4. 执行 `pnpm build`。
+5. 把结果截图或构建输出发给我。
+
+### 33.9 当前状态更新
+
+第 33 步已经完成。
+
+从截图看，当前 `/chat` 已经具备：
+
+1. 左侧系统主导航。
+2. 品牌区 `智能运营平台 / Full Stack Demo`。
+3. 当前路由 `智能问数` 的选中态。
+4. 智能问数页内部的 `近30天记录`。
+5. 右侧聊天主区域。
+6. 用户消息和 AI 回复内容正常展示。
+
+当前结构已经符合这一层级：
+
+```txt
+Layout
+  左侧系统主导航
+  右侧当前页面
+    ChatPage
+      近30天记录
+      聊天内容
+```
+
+这一步到这里可以继续往下走。
+
+---
+
+## 第 34 步：清理 Vite 默认全局样式，统一桌面后台基础样式
+
+第 34 步先不继续加功能。
+
+这一轮处理一个基础问题：
+
+```txt
+清理 frontend/src/index.css 里残留的 Vite 模板样式。
+```
+
+原因：
+
+项目现在已经不是 Vite 默认欢迎页了。
+
+但是 `index.css` 里还保留了一些模板样式，例如：
+
+```css
+#root {
+  text-align: center;
+  border-inline: 1px solid var(--border);
+}
+```
+
+还有：
+
+```css
+h1 {
+  font-size: 56px;
+}
+```
+
+这些样式对后台系统页面不合适。
+
+后台页面应该由：
+
+```txt
+layout.css
+settings.css
+feedback.css
+chat.css
+modal.css
+```
+
+这些业务样式控制。
+
+`index.css` 只保留最基础的全局规则。
+
+### 34.1 修改 `frontend/src/index.css`
+
+打开：
+
+```txt
+frontend/src/index.css
+```
+
+把里面的 Vite 模板样式替换成：
+
+```css
+:root {
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  color: #172033;
+  background: #f4f6fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  min-width: 1280px;
+  margin: 0;
+  background: #f4f6fa;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+```
+
+这里重点是：
+
+```css
+body {
+  min-width: 1280px;
+}
+```
+
+因为你已经明确说：
+
+```txt
+不需要考虑移动端
+```
+
+所以这里可以按桌面后台来处理。
+
+桌面后台页如果窗口太窄，可以横向滚动，不需要在这一轮适配手机。
+
+### 34.2 为什么要删全局 h1 / h2
+
+原来的 `index.css` 里有：
+
+```css
+h1 {
+  font-size: 56px;
+}
+```
+
+这适合 Vite 欢迎页，不适合后台系统。
+
+后台系统里不同位置的标题大小不一样：
+
+- 页面标题一般 24px 左右。
+- 卡片标题一般 16px 到 18px。
+- 弹窗标题一般 18px。
+- 聊天顶部标题一般 16px。
+
+如果在 `index.css` 里全局写死：
+
+```css
+h1 {
+  font-size: 56px;
+}
+```
+
+后面每个页面都要写更多 CSS 去覆盖它。
+
+所以更好的做法是：
+
+```txt
+index.css 不控制具体业务标题大小。
+具体标题由页面样式文件控制。
+```
+
+### 34.3 为什么要删 `#root` 的居中和边框
+
+原来的 Vite 模板适合居中的展示页，所以会写：
+
+```css
+#root {
+  text-align: center;
+  border-inline: 1px solid var(--border);
+}
+```
+
+但现在项目是后台系统。
+
+后台系统的布局由：
+
+```css
+.app-layout
+```
+
+控制。
+
+如果 `#root` 继续控制居中、边框、flex 布局，容易和页面 layout 打架。
+
+所以 `#root` 只保留：
+
+```css
+#root {
+  min-height: 100%;
+}
+```
+
+### 34.4 修改 `frontend/src/styles/layout.css`
+
+打开：
+
+```txt
+frontend/src/styles/layout.css
+```
+
+如果文件底部还有移动端相关代码，例如：
+
+```css
+@media (max-width: 720px) {
+  ...
+}
+```
+
+这一轮可以删掉。
+
+原因：
+
+- 当前项目不考虑移动端。
+- 先保持桌面端样式清晰。
+- 后续也不用因为窄屏去调整页面结构。
+
+保留桌面端规则即可。
+
+### 34.5 执行构建
+
+进入前端目录：
+
+```bash
+cd frontend
+```
+
+执行：
+
+```bash
+pnpm build
+```
+
+### 34.6 本轮验收标准
+
+完成第 34 步后，应该确认：
+
+1. `frontend/src/index.css` 已经没有 Vite 欢迎页残留样式。
+2. `#root` 不再控制居中、边框、flex 布局。
+3. 全局不再写死 `h1`、`h2` 的业务字体大小。
+4. `body` 设置了桌面后台最小宽度。
+5. `layout.css` 里不再为了移动端写额外 `@media`。
+6. `/chat` 页面视觉没有明显变化。
+7. `pnpm build` 通过。
+
+你现在只做：
+
+1. 修改 `frontend/src/index.css`。
+2. 清理 `frontend/src/styles/layout.css` 里移动端相关的 `@media`。
+3. 执行 `pnpm build`。
+4. 把构建结果或页面截图发给我。
+
+### 34.7 当前状态更新
+
+第 34 步已经完成。
+
+当前已经完成：
+
+1. `frontend/src/index.css` 清掉了 Vite 默认欢迎页样式。
+2. 全局不再写死 `h1`、`h2` 的业务字号。
+3. `#root` 不再控制居中、边框和 flex 布局。
+4. `layout.css` 已经去掉移动端 `@media`。
+
+下一步继续做样式还原。
+
+---
+
+## 第 35 步：按原型还原左侧侧边栏样式
+
+这一轮只处理左侧侧边栏。
+
+不处理：
+
+- AI 回复数据展示。
+- 聊天表格格式。
+- 应用配置卡片。
+- 回复校对表格。
+- 后端接口。
+
+原因：
+
+当前截图里最明显的不一致是侧边栏。
+
+原型里的侧边栏结构是：
+
+```txt
+智能问数
+
+系统管理 v
+  应用配置
+
+反馈管理 v
+  回复校对
+```
+
+而不是：
+
+```txt
+品牌区
+智能问数
+系统管理
+应用配置
+反馈管理
+回复校对
+```
+
+所以第 35 步先把侧边栏还原到原型风格。
+
+### 35.1 修改 `frontend/src/layout/index.tsx`
+
+调整方向：
+
+1. 去掉顶部品牌区 `智能运营平台 / Full Stack Demo`。
+2. `智能问数` 作为第一个大号主菜单。
+3. `系统管理` 作为分组标题，不是普通小标题。
+4. `应用配置` 作为系统管理下面的缩进子菜单。
+5. `反馈管理` 作为分组标题。
+6. `回复校对` 作为反馈管理下面的缩进子菜单。
+
+分组标题右侧用 CSS 画下拉箭头即可，不需要再引入额外图标。
+
+### 35.2 修改 `frontend/src/styles/layout.css`
+
+样式目标：
+
+1. `.side-nav` 保持白底和右边框。
+2. `/chat` 选中时，`智能问数` 是大号蓝色圆角块。
+3. 分组标题字号更大，接近原型里的 `系统管理`、`反馈管理`。
+4. 子菜单缩进，接近原型里的 `应用配置`、`回复校对`。
+5. `/settings` 或 `/feedbacks` 选中时，子菜单用浅蓝背景和蓝色文字提示当前页。
+
+注意：
+
+`智能问数` 不能永远是蓝色。
+
+只有当前路由是：
+
+```txt
+/chat
+```
+
+时才是蓝色。
+
+当前路由是：
+
+```txt
+/settings
+```
+
+或：
+
+```txt
+/feedbacks
+```
+
+时，对应的子菜单应该有选中态。
+
+### 35.3 本轮验收标准
+
+完成第 35 步后，应该确认：
+
+1. 侧边栏顶部不再显示品牌区。
+2. `/chat` 页面里 `智能问数` 是蓝色大号主菜单。
+3. `系统管理` 和 `反馈管理` 是分组标题，并且右侧有下拉箭头。
+4. `应用配置` 和 `回复校对` 是缩进子菜单。
+5. 切到 `/settings` 时，`应用配置` 有选中态。
+6. 切到 `/feedbacks` 时，`回复校对` 有选中态。
+7. `pnpm build` 通过。
+
+你现在只做：
+
+1. 修改 `frontend/src/layout/index.tsx`。
+2. 修改 `frontend/src/styles/layout.css`。
+3. 执行 `pnpm build`。
+4. 把侧边栏截图发给我。
+
+### 35.4 当前状态更新
+
+第 35 步代码已经完成。
+
+当前已调整：
+
+1. 去掉侧边栏顶部品牌区。
+2. `智能问数` 改成大号主菜单。
+3. `系统管理` 改成分组标题。
+4. `应用配置` 改成系统管理下的缩进子菜单。
+5. `反馈管理` 改成分组标题。
+6. `回复校对` 改成反馈管理下的缩进子菜单。
+7. `/chat` 选中时，`智能问数` 才显示蓝色大块。
+8. `/settings` 和 `/feedbacks` 选中时，对应子菜单显示浅蓝选中态。
+
+已验证：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+结果：通过。
+
+
+### 35.5 二次修正：侧边栏尺寸和换行问题
+
+第一次侧边栏还原后，出现了明显问题：
+
+```txt
+菜单文字被挤到两行，尺寸和原型不一致。
+```
+
+原因：
+
+- 侧边栏总宽度仍然是桌面后台的固定宽度。
+- 但主菜单、分组标题、子菜单的字号和左右 padding 拉得太大。
+- 图标、文字、间距加起来超过了侧边栏可用宽度。
+
+已修正：
+
+1. 保持侧边栏宽度不乱扩。
+2. 收回主菜单字号、图标尺寸和左右 padding。
+3. 收回分组标题字号和箭头尺寸。
+4. 收回子菜单字号、图标尺寸和缩进距离。
+5. 给菜单文字统一增加：
+
+```css
+white-space: nowrap;
+overflow: hidden;
+text-overflow: ellipsis;
+```
+
+这样可以避免：
+
+```txt
+智能问数
+应用配置
+反馈管理
+回复校对
+```
+
+这些四字菜单再被拆成两行。
+
+再次验证：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+结果：通过。
+
+
+### 35.6 三次修正：按 `demo.html` 原始侧边栏 CSS 对齐
+
+再次对照 `demo.html` 后确认，原型侧边栏真实尺寸不是 20px 或 18px 字号，而是：
+
+```css
+.sidebar-menu .menu-item {
+  height: var(--h-nav); /* 48px */
+  font-size: 16px;
+  font-weight: 500;
+  gap: 12px;
+  padding: 0 16px;
+  margin: 0 8px;
+  border-radius: 6px;
+}
+
+.sidebar-menu .sub-menu .menu-item {
+  height: 40px;
+  padding-left: 36px;
+  font-size: 16px;
+  font-weight: 400;
+  gap: 8px;
+}
+```
+
+所以本次已经把 React 侧边栏回调到这组原型数值：
+
+1. 主菜单高度：`48px`。
+2. 主菜单字号：`16px`。
+3. 主菜单字重：`500`，选中时 `600`。
+4. 主菜单左右边距：`margin: 0 8px`。
+5. 主菜单内边距：`padding: 0 16px`。
+6. 主菜单圆角：`6px`。
+7. 子菜单高度：`40px`。
+8. 子菜单字号：`16px`。
+9. 子菜单字重：`400`。
+10. 子菜单缩进：`padding-left: 36px`。
+11. 子菜单图标宽度接近原型：`14px`。
+
+这次不再按截图目测放大字号，而是以 `demo.html` 的真实 CSS 为准。
+
+再次验证：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+结果：通过。
+
+### 35.7 补充交互：父级菜单支持折叠和展开
+
+本次补的是侧边栏里“带子节点”的父级菜单交互。
+
+涉及父级：
+
+1. `系统管理`
+2. `反馈管理`
+
+原来这两个父级只是静态展示：
+
+```tsx
+<div className="side-nav-group-title">...</div>
+```
+
+所以点击父级不会发生任何变化。
+
+现在改成：
+
+```tsx
+<button
+  className={`side-nav-group-title ${openGroups.system ? "is-open" : ""}`}
+  type="button"
+  aria-expanded={openGroups.system}
+  onClick={() => toggleGroup("system")}
+>
+  ...
+</button>
+```
+
+核心逻辑：
+
+```tsx
+const [openGroups, setOpenGroups] = useState<Record<NavGroupKey, boolean>>({
+  system: true,
+  feedback: true,
+});
+```
+
+含义：
+
+1. 页面初始时，`系统管理` 和 `反馈管理` 默认展开。
+2. 点击父级标题时，对应分组在展开和收起之间切换。
+3. 展开时渲染子菜单。
+4. 收起时不渲染子菜单。
+5. 父级使用 `button`，并加上 `aria-expanded`，语义上比 `div` 更适合点击交互。
+
+同时补了样式：
+
+1. 重置 `button` 默认边框、背景、字体。
+2. 保持父级菜单仍然是 `48px` 高度、`16px` 字号。
+3. 箭头在收起和展开时改变方向。
+4. 子菜单用 `.side-nav-submenu` 包起来，后续如果要加动画也更方便。
+
+已验证：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+结果：通过。
+
+### 35.8 补充动画：子菜单收起时逐渐消失
+
+第 35.7 里最初的写法是：
+
+```tsx
+{openGroups.system ? (
+  <div className="side-nav-submenu">...</div>
+) : null}
+```
+
+这种写法的问题是：
+
+```txt
+收起时，子菜单 DOM 会被立刻删除。
+```
+
+所以浏览器没有机会播放“逐渐消失”的动画。
+
+本次改成：
+
+```tsx
+<div
+  className={`side-nav-submenu ${openGroups.system ? "is-open" : ""}`}
+  aria-hidden={!openGroups.system}
+>
+  <div className="side-nav-submenu-content">...</div>
+</div>
+```
+
+也就是：
+
+1. 子菜单一直保留在 DOM 中。
+2. 展开时加 `.is-open`。
+3. 收起时去掉 `.is-open`。
+4. 通过 CSS 控制高度、透明度和位移过渡。
+
+核心 CSS：
+
+```css
+.side-nav-submenu {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+  visibility: hidden;
+  transition:
+    grid-template-rows 0.18s ease,
+    opacity 0.16s ease,
+    transform 0.18s ease,
+    visibility 0s linear 0.18s;
+}
+
+.side-nav-submenu.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+```
+
+这里用 `grid-template-rows: 0fr -> 1fr`，是为了让高度可以平滑收起和展开。
+
+同时用：
+
+```css
+.side-nav-submenu-content {
+  min-height: 0;
+  overflow: hidden;
+}
+```
+
+是为了让内部内容真的能被压缩到 `0` 高度。
+
+已验证：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+结果：通过。
+
+---
+
+## 第 36 步：按原型补顶部 Nav Bar
+
+这一轮只补顶部 nav bar。
+
+参考 `demo.html` 里的原型结构：
+
+```html
+<div class="top-bar">
+  <div class="brand"><i class="fas fa-chart-line"></i> 经管之星</div>
+  <div class="top-right">
+    <div class="icon-btn" title="消息通知">
+      <i class="fas fa-bell"></i>
+      <span class="badge-dot"></span>
+    </div>
+    <div class="avatar">管</div>
+  </div>
+</div>
+```
+
+原型里的真实 CSS 关键值：
+
+```css
+.top-bar {
+  height: 56px;
+  min-height: 56px;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.top-bar .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--primary);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .5px;
+}
+```
+
+所以第 36 步不要凭感觉设计新的顶部栏，直接按原型补。
+
+### 36.1 当前布局为什么要调整
+
+当前 React 的 layout 结构大概是：
+
+```txt
+app-layout
+  side-nav
+  app-layout-content
+```
+
+它是左右两列。
+
+但原型是：
+
+```txt
+app-layout
+  top-bar
+  body
+    sidebar
+    main
+```
+
+也就是：
+
+```txt
+顶部 nav bar 横跨整页
+下面再分左侧菜单和右侧内容
+```
+
+所以第 36 步要把结构调整成：
+
+```txt
+app-layout
+  top-bar
+  app-body
+    side-nav
+    app-layout-content
+```
+
+注意：
+
+顶部栏高度是 `56px`。
+
+下面主体区域高度应该是：
+
+```css
+calc(100vh - 56px)
+```
+
+否则页面会比视口多出一个顶部栏高度，容易出现不必要的滚动。
+
+### 36.2 修改 `frontend/src/layout/index.tsx`
+
+打开：
+
+```txt
+frontend/src/layout/index.tsx
+```
+
+增加顶部栏。
+
+建议使用 `lucide-react` 里已确认存在的图标：
+
+```tsx
+ChartLine
+Bell
+User
+GitBranch
+LogOut
+```
+
+目标结构：
+
+```tsx
+import { useState } from 'react'
+import {
+  Bell,
+  Bot,
+  ChartLine,
+  CircleAlert,
+  Flag,
+  GitBranch,
+  LogOut,
+  Settings,
+  SlidersHorizontal,
+  User,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import { NavLink, Outlet } from 'react-router-dom'
+```
+
+`Layout` 里增加用户菜单状态：
+
+```tsx
+const [userMenuOpen, setUserMenuOpen] = useState(false)
+```
+
+然后结构改成：
+
+```tsx
+const Layout = () => {
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+
+  return (
+    <div className="app-layout">
+      <header className="top-bar">
+        <div className="top-brand">
+          <ChartLine size={18} strokeWidth={2.4} />
+          <span>经管之星</span>
+        </div>
+
+        <div className="top-right">
+          <button className="top-icon-button" type="button" title="消息通知">
+            <Bell size={18} strokeWidth={2.2} />
+            <span className="badge-dot" />
+          </button>
+
+          <div className="top-avatar-wrap">
+            <button
+              className="top-avatar"
+              type="button"
+              onClick={() => setUserMenuOpen(open => !open)}
+            >
+              管
+            </button>
+
+            {userMenuOpen && (
+              <div className="top-dropdown">
+                <button type="button">
+                  <User size={15} />
+                  个人信息
+                </button>
+                <div className="top-dropdown-version">
+                  <GitBranch size={15} />
+                  v1.0.0
+                </div>
+                <button className="danger" type="button">
+                  <LogOut size={15} />
+                  退出登录
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <div className="app-body">
+        <aside className="side-nav">
+          ...
+        </aside>
+
+        <section className="app-layout-content">
+          <Outlet />
+        </section>
+      </div>
+    </div>
+  )
+}
+```
+
+注意：
+
+- `top-bar` 放在 `side-nav` 外面。
+- `side-nav` 和 `app-layout-content` 放在 `app-body` 里面。
+- 不要把顶部栏写进某一个页面里。
+- 顶部栏属于 layout，不属于 `ChatPage`、`AppConfigPage` 或 `FeedbackReviewPage`。
+
+### 36.3 修改 `frontend/src/styles/layout.css`
+
+打开：
+
+```txt
+frontend/src/styles/layout.css
+```
+
+把当前 `.app-layout` 从左右 grid 改成上下结构：
+
+```css
+.app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  color: #172033;
+}
+
+.top-bar {
+  height: 56px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+  padding: 0 24px;
+}
+
+.top-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #2f54eb;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.top-icon-button {
+  width: 40px;
+  height: 40px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.top-icon-button:hover {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #ef4444;
+}
+
+.top-avatar-wrap {
+  position: relative;
+}
+
+.top-avatar {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: #2f54eb;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.top-avatar:hover {
+  box-shadow: 0 0 0 3px #e0e7ff;
+}
+
+.top-dropdown {
+  min-width: 160px;
+  position: absolute;
+  top: 44px;
+  right: 0;
+  z-index: 20;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  padding: 6px 0;
+}
+
+.top-dropdown button,
+.top-dropdown-version {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: #4b5563;
+  padding: 0 16px;
+  font-size: 15px;
+  text-align: left;
+}
+
+.top-dropdown button {
+  cursor: pointer;
+}
+
+.top-dropdown button:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.top-dropdown-version {
+  color: #9ca3af;
+  cursor: default;
+}
+
+.top-dropdown .danger {
+  border-top: 1px solid #e5e7eb;
+  color: #ef4444;
+}
+
+.app-body {
+  height: calc(100vh - 56px);
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  overflow: hidden;
+  background: #f4f6fa;
+}
+```
+
+然后调整侧边栏：
+
+```css
+.side-nav {
+  min-height: 0;
+  height: 100%;
+  border-right: 1px solid #dbe3ef;
+  background: #ffffff;
+  padding: 8px 0;
+  box-sizing: border-box;
+}
+```
+
+再调整右侧内容：
+
+```css
+.app-layout-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+```
+
+### 36.4 修改 `frontend/src/styles/chat.css`
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+当前如果还有：
+
+```css
+.chat-page {
+  min-height: 100vh;
+}
+```
+
+需要改成：
+
+```css
+.chat-page {
+  height: 100%;
+  min-height: 0;
+}
+```
+
+原因：
+
+现在顶部栏已经占用了 `56px`。
+
+如果聊天页继续用：
+
+```css
+min-height: 100vh;
+```
+
+整个页面就会变成：
+
+```txt
+56px top-bar + 100vh chat-page
+```
+
+会多出一截高度。
+
+所以聊天页应该占满右侧内容区，而不是重新占满整个浏览器高度。
+
+### 36.5 本轮不做的事
+
+第 36 步只补顶部栏。
+
+不做：
+
+- 不做真实通知列表。
+- 不做真实登录退出。
+- 不改后端鉴权。
+- 不做顶部栏响应式。
+- 不改三个页面业务逻辑。
+
+用户头像下拉只是原型 UI 还原。
+
+### 36.6 执行构建
+
+进入前端目录：
+
+```bash
+cd frontend
+```
+
+执行：
+
+```bash
+pnpm build
+```
+
+### 36.7 本轮验收标准
+
+完成第 36 步后，应该确认：
+
+1. 页面顶部出现 `56px` 高度的 nav bar。
+2. 左侧显示 `经管之星` 品牌。
+3. 右侧显示通知按钮和用户头像 `管`。
+4. 点击用户头像可以看到 `个人信息 / v1.0.0 / 退出登录`。
+5. 侧边栏从顶部栏下方开始，而不是顶到浏览器最上面。
+6. `/chat` 页面没有因为顶部栏多出额外纵向滚动。
+7. `/settings` 和 `/feedbacks` 仍然正常显示。
+8. `pnpm build` 通过。
+
+你现在只做：
+
+1. 修改 `frontend/src/layout/index.tsx`。
+2. 修改 `frontend/src/styles/layout.css`。
+3. 修改 `frontend/src/styles/chat.css`。
+4. 执行 `pnpm build`。
+5. 把顶部 nav bar 截图发给我。
+
+---
+
+### 36.8 当前状态更新：顶部 Nav Bar 已完成
+
+用户反馈：
+
+```txt
+顶部 navbar 已经改完了。
+```
+
+所以后续不再把“补顶部 Nav Bar”当作下一步。
+
+当前布局已经进入：
+
+```txt
+top-bar
+app-body
+  side-nav
+  app-layout-content
+```
+
+这种结构。
+
+接下来优先处理聊天页的滚动问题。
+
+---
+
+## 第 37 步：修复聊天页滚动结构，让输入框始终停在底部
+
+这一轮只修聊天页滚动。
+
+当前问题：
+
+```txt
+对话内容区和左侧历史记录区跟着整个页面一起滚动。
+消息一多时，输入框被挤到最底下，需要滚动页面才能看到。
+```
+
+目标效果：
+
+```txt
+整个聊天页面本身不滚动。
+左侧历史记录自己滚动。
+右侧消息内容自己滚动。
+顶部会话标题固定在右侧顶部。
+底部输入框始终显示在右侧底部。
+```
+
+注意：
+
+这里不要用：
+
+```css
+position: fixed;
+```
+
+原因：
+
+- 输入框属于右侧聊天区域，不应该脱离 layout。
+- 如果用 `fixed`，它会相对浏览器视口定位，容易盖住侧边栏、顶部栏或其他页面。
+- 更好的做法是让 `chat-main` 自己成为一个固定高度的三行布局：
+
+```txt
+chat-main
+  chat-header    固定高度
+  chat-content   占剩余空间，并且自己滚动
+  chat-input-bar 固定在底部
+```
+
+### 37.1 先理解为什么现在会一起滚
+
+当前聊天页大致结构是：
+
+```tsx
+<main className="chat-page">
+  <aside className="chat-sidebar">
+    <div className="chat-sidebar-header">近30天记录</div>
+    <button className="new-chat-button">开启新对话</button>
+    <nav className="chat-history">...</nav>
+  </aside>
+
+  <section className="chat-main">
+    <header className="chat-header">...</header>
+    <div className="chat-content">...</div>
+    <div className="chat-input-bar">...</div>
+  </section>
+</main>
+```
+
+这个结构本身是对的。
+
+真正的问题通常出在 CSS 的高度链路没有锁住：
+
+```txt
+app-body
+app-layout-content
+chat-page
+chat-sidebar
+chat-main
+chat-content
+```
+
+这些父级里，只要有一层没有：
+
+```css
+height: 100%;
+min-height: 0;
+overflow: hidden;
+```
+
+子级的 `overflow: auto` 就可能失效。
+
+结果就是：
+
+```txt
+不是 chat-content 自己滚，
+而是外层页面整体滚。
+```
+
+### 37.2 修改 `frontend/src/styles/layout.css`
+
+打开：
+
+```txt
+frontend/src/styles/layout.css
+```
+
+确认外层主区域是固定在视口内的。
+
+如果现在是顶部栏结构，重点检查：
+
+```css
+.app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-body {
+  height: calc(100vh - 56px);
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  overflow: hidden;
+}
+```
+
+然后把右侧内容容器改成不负责滚动：
+
+```css
+.app-layout-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+```
+
+原因：
+
+`app-layout-content` 是所有页面的容器。
+
+如果这里写：
+
+```css
+overflow: auto;
+```
+
+那么聊天页很容易变成“整个右侧页面一起滚”，输入框就会被内容往下挤。
+
+聊天页应该由内部的 `.chat-content` 和 `.chat-history` 各自滚动。
+
+### 37.3 修改 `frontend/src/styles/chat.css`：锁住聊天页本身
+
+打开：
+
+```txt
+frontend/src/styles/chat.css
+```
+
+先确认 `.chat-page`：
+
+```css
+.chat-page {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  overflow: hidden;
+  background: #f4f6fa;
+  color: #172033;
+}
+```
+
+关键是：
+
+```css
+height: 100%;
+min-height: 0;
+overflow: hidden;
+```
+
+含义：
+
+1. `height: 100%`：聊天页只占满右侧内容区域。
+2. `min-height: 0`：允许里面的 grid 子项被压缩。
+3. `overflow: hidden`：聊天页自己不滚动，把滚动交给内部区域。
+
+### 37.4 修改左侧历史记录区：只有历史列表滚动
+
+当前左侧结构是：
+
+```txt
+chat-sidebar
+  chat-sidebar-header
+  new-chat-button
+  chat-history
+```
+
+目标是：
+
+```txt
+标题和新建按钮固定
+只有 chat-history 滚动
+```
+
+建议改成：
+
+```css
+.chat-sidebar {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  border-right: 1px solid #dbe3ef;
+  background: #f8fbff;
+  padding: 18px 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.chat-history {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  margin-top: 12px;
+  overflow: auto;
+}
+```
+
+注意：
+
+`chat-history` 需要：
+
+```css
+align-content: start;
+```
+
+否则当历史记录比较少时，grid 容器有可能把子项分布得不自然。
+
+### 37.5 修改右侧主聊天区：消息滚动，输入框固定在底部
+
+当前右侧结构是：
+
+```txt
+chat-main
+  chat-header
+  chat-content
+  chat-input-bar
+```
+
+目标 CSS：
+
+```css
+.chat-main {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: linear-gradient(90deg, #fff 0%, #fff 84%, #eef1f6 100%);
+}
+```
+
+关键是：
+
+```css
+grid-template-rows: 48px minmax(0, 1fr) auto;
+```
+
+含义：
+
+1. 第一行 `48px`：会话标题栏固定高度。
+2. 第二行 `minmax(0, 1fr)`：消息区吃掉剩余空间。
+3. 第三行 `auto`：输入框按自身高度显示在底部。
+
+然后消息内容区：
+
+```css
+.chat-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 36px 24px;
+  box-sizing: border-box;
+}
+```
+
+这里要把原来的底部大 padding 收回来。
+
+如果现在是：
+
+```css
+padding: 24px 36px 96px;
+```
+
+可以改成：
+
+```css
+padding: 24px 36px 24px;
+```
+
+原因：
+
+以前可能是为了给底部输入框留空间。
+
+但现在输入框已经是 grid 的第三行，不会覆盖消息内容，所以不需要额外留 `96px`。
+
+### 37.6 输入框保持在底部，不被内容挤走
+
+当前输入框可以继续作为 `.chat-main` 的第三行。
+
+建议只微调：
+
+```css
+.chat-input-bar {
+  width: min(640px, calc(100% - 72px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+  justify-self: center;
+  margin: 0 0 18px;
+  border: 1px solid #cbd6e6;
+  border-radius: 999px;
+  background: #fff;
+  padding: 7px 8px 7px 18px;
+  box-shadow: 0 10px 30px rgba(37, 99, 235, 0.12);
+}
+```
+
+重点是：
+
+```css
+margin: 0 0 18px;
+```
+
+不要让它依赖外层页面滚动。
+
+如果想保持水平居中，继续用：
+
+```css
+justify-self: center;
+```
+
+### 37.7 本轮不做的事
+
+这一轮只修滚动结构。
+
+不做：
+
+- 不改聊天接口。
+- 不改消息发送逻辑。
+- 不改回答数据渲染。
+- 不改侧边栏主菜单。
+- 不改顶部 Nav Bar。
+- 不做移动端适配。
+
+### 37.8 执行构建
+
+进入前端目录：
+
+```bash
+cd frontend
+```
+
+执行：
+
+```bash
+pnpm build
+```
+
+如果当前环境里 `pnpm` 不可用，也可以用本地脚本：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+### 37.9 本轮验收标准
+
+完成第 37 步后，应该确认：
+
+1. 页面整体不再因为消息变多而滚动。
+2. 左侧 `近30天记录` 和 `开启新对话` 保持可见。
+3. 左侧历史记录多的时候，只有 `.chat-history` 自己滚动。
+4. 右侧顶部会话标题保持可见。
+5. 右侧消息多的时候，只有 `.chat-content` 自己滚动。
+6. 底部输入框始终显示在聊天区域底部。
+7. 输入框不会被消息内容挤到页面最底下。
+8. `/settings`、`/feedbacks` 页面不被这次改动破坏。
+9. 构建通过。
+
+你现在只做：
+
+1. 修改 `frontend/src/styles/layout.css`。
+2. 修改 `frontend/src/styles/chat.css`。
+3. 不改 `ChatPage.tsx`，除非 CSS 无法解决。
+4. 执行构建。
+5. 把聊天页滚动修复后的截图发给我。
+
+### 37.10 当前状态更新：滚动问题已由用户完成
+
+用户反馈：
+
+```txt
+我以我自己的经验把滚动修好了，跟你的不太一样，但是你要按我的来，不要动我的代码。
+```
+
+所以第 37 步后续不再按上面 `37.2 ~ 37.6` 的建议 CSS 重新改。
+
+当前原则：
+
+1. 滚动问题以用户当前实现为准。
+2. 后续不要为了“贴合 plan 旧写法”回滚或重写用户已经改好的滚动代码。
+3. 如果后续新增展开/收起功能需要动到布局，只做最小增量，不破坏现有滚动结构。
+4. 如果发现 plan 旧方案和当前源码不一致，以当前源码为准，再把 plan 补充说明清楚。
+
+当前滚动验收状态：
+
+1. 输入框已经能保持在页面底部。
+2. 对话内容和历史记录滚动问题已经由用户自行修复。
+3. 下一步不再处理滚动，而是处理对话界面里缺失的展开/收起交互。
+
+---
+
+## 第 38 步：按原型补齐对话界面的展开/收起交互
+
+这一轮只做截图红圈里的展开/收起。
+
+当前项目已经改成 Flex 布局，本轮全程按 Flex 方案实现。
+
+本轮只做 2 个功能按钮：
+
+1. 最左侧系统主导航底部按钮：收起/展开系统主导航。
+2. 对话历史栏开关按钮：同一个按钮互斥出现在两个位置。
+
+对话历史栏开关按钮的交互规则：
+
+```txt
+历史记录栏展开时：按钮显示在“近30天记录”顶部右侧。
+点击后：历史记录栏收起。
+
+历史记录栏收起时：按钮显示在对话容器标题栏左侧。
+点击后：历史记录栏展开。
+```
+
+也就是说，历史栏开关不是两个常驻按钮，而是一个功能按钮在两个位置互斥出现。
+
+原型里的系统主导航关键实现：
+
+```css
+.sidebar {
+  width: 224px;
+  min-width: 224px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+  transition: width .25s, min-width .25s;
+}
+
+.sidebar.collapsed {
+  width: 60px;
+  min-width: 60px;
+}
+
+.sidebar.collapsed .menu-item span,
+.sidebar.collapsed .menu-item .arrow {
+  display: none;
+}
+
+.sidebar.collapsed .sub-menu {
+  max-height: 0 !important;
+  overflow: hidden;
+}
+
+.sidebar.collapsed .sidebar-footer {
+  justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-footer .sidebar-toggle {
+  transform: rotate(180deg);
+}
+```
+
+原型里的行为是切换 collapsed class。React 里不用直接操作 DOM，统一用 state 控制 class。
+
+### 38.1 本轮边界
+
+这一轮不动第 37 步滚动实现。
+
+不改：
+
+```txt
+chat-content 的滚动逻辑
+chat-history 的滚动逻辑
+chat-input-bar 的底部定位逻辑
+app-layout-content 的 overflow 方案
+```
+
+只改：
+
+```txt
+收起状态
+展开状态
+宽度动画
+按钮图标
+按钮位置
+文字隐藏
+```
+
+### 38.2 系统主导航收起/展开
+
+修改文件：
+
+```txt
+frontend/src/layout/index.tsx
+frontend/src/styles/layout.css
+```
+
+状态：
+
+```tsx
+const [mainNavCollapsed, setMainNavCollapsed] = useState(false)
+```
+
+结构：
+
+```tsx
+<aside className={`side-nav ${mainNavCollapsed ? "is-collapsed" : ""}`}>
+  ...
+  <div className="side-nav-footer">
+    <button
+      className="side-nav-collapse-button"
+      type="button"
+      title={mainNavCollapsed ? "展开侧边栏" : "收起侧边栏"}
+      onClick={() => setMainNavCollapsed(collapsed => !collapsed)}
+    >
+      <ChevronLeft size={18} strokeWidth={2.2} />
+    </button>
+  </div>
+</aside>
+```
+
+`.app-body` 使用 Flex：
+
+```css
+.app-body {
+  height: calc(100vh - 56px);
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: #f4f6fa;
+}
+
+.side-nav {
+  flex: 0 0 224px;
+  width: 224px;
+  min-width: 224px;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid #dbe3ef;
+  background: #ffffff;
+  padding: 8px 0;
+  box-sizing: border-box;
+  transition:
+    flex-basis 0.25s ease,
+    width 0.25s ease,
+    min-width 0.25s ease;
+}
+
+.side-nav.is-collapsed {
+  flex-basis: 60px;
+  width: 60px;
+  min-width: 60px;
+}
+
+.app-layout-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+```
+
+收起后的菜单表现：
+
+```css
+.side-nav.is-collapsed .side-nav-link,
+.side-nav.is-collapsed .side-nav-group-title {
+  justify-content: center;
+  margin: 0 4px;
+  padding: 0 8px;
+}
+
+.side-nav.is-collapsed .side-nav-link span,
+.side-nav.is-collapsed .side-nav-group-title span,
+.side-nav.is-collapsed .side-nav-group-title i {
+  display: none;
+}
+
+.side-nav.is-collapsed .side-nav-submenu {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.side-nav-footer {
+  margin-top: auto;
+  padding: 8px 12px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.side-nav-collapse-button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8a94a6;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    transform 0.25s ease;
+}
+
+.side-nav-collapse-button:hover {
+  background: #f3f4f6;
+  color: #172033;
+}
+
+.side-nav.is-collapsed .side-nav-footer {
+  justify-content: center;
+}
+
+.side-nav.is-collapsed .side-nav-collapse-button {
+  transform: rotate(180deg);
+}
+```
+
+### 38.3 对话历史栏互斥开关
+
+修改文件：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+frontend/src/styles/chat.css
+```
+
+状态：
+
+```tsx
+const [historyCollapsed, setHistoryCollapsed] = useState(false)
+```
+
+图标统一用用户截图里的样式含义。
+
+两个位置的图标方向要相反：
+
+```txt
+历史记录栏展开时：按钮在历史栏顶部右侧，表示“把历史栏收起来”。
+历史记录栏收起时：按钮在对话标题栏左侧，表示“把历史栏展开回来”。
+```
+
+所以第二个位置的图标需要做 180 度镜像。
+
+```tsx
+<PanelLeftClose size={18} strokeWidth={2.2} />
+<PanelLeftOpen size={18} strokeWidth={2.2} />
+```
+
+结构：
+
+```tsx
+<main className={`chat-page ${historyCollapsed ? "is-history-collapsed" : ""}`}>
+  <aside className="chat-sidebar" aria-hidden={historyCollapsed}>
+    <div className="chat-sidebar-header">
+      <strong>近30天记录</strong>
+
+      {!historyCollapsed && (
+        <button
+          className="chat-history-toggle-button"
+          type="button"
+          title="收起历史记录"
+          onClick={() => setHistoryCollapsed(true)}
+        >
+          <PanelLeftClose size={18} strokeWidth={2.2} />
+        </button>
+      )}
+    </div>
+
+    ...
+  </aside>
+
+  <section className="chat-main">
+    <header className="chat-header">
+      <div className="chat-header-left">
+        {historyCollapsed && (
+          <button
+            className="chat-history-toggle-button is-mirrored"
+            type="button"
+            title="展开历史记录"
+            onClick={() => setHistoryCollapsed(false)}
+          >
+            <PanelLeftOpen size={18} strokeWidth={2.2} />
+          </button>
+        )}
+      </div>
+
+      <h1>{pageTitle}</h1>
+
+      <div className="chat-header-right" />
+    </header>
+
+    ...
+  </section>
+</main>
+```
+
+关键点：
+
+1. `historyCollapsed === false` 时，只渲染历史栏顶部右侧按钮。
+2. `historyCollapsed === true` 时，只渲染对话标题栏左侧按钮。
+3. 两个位置不会同时出现按钮。
+4. 两个按钮控制同一个状态。
+5. 对话标题栏左侧按钮需要相对历史栏顶部右侧按钮做 180 度镜像。
+6. 历史栏收起后，当前会话和消息不丢失。
+
+### 38.4 对话历史栏 Flex 动画
+
+CSS：
+
+```css
+.chat-page {
+  height: 100%;
+  display: flex;
+  background: #f4f6fa;
+  color: #172033;
+}
+
+.chat-sidebar {
+  flex: 0 0 200px;
+  width: 200px;
+  min-width: 200px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid #dbe3ef;
+  background: #f8fbff;
+  padding: 18px 12px;
+  box-sizing: border-box;
+  opacity: 1;
+  transition:
+    flex-basis 0.25s ease,
+    width 0.25s ease,
+    min-width 0.25s ease,
+    opacity 0.2s ease,
+    padding 0.25s ease;
+}
+
+.chat-page.is-history-collapsed .chat-sidebar {
+  flex-basis: 0;
+  width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  opacity: 0;
+  pointer-events: none;
+  border-right: 0;
+}
+
+.chat-main {
+  flex: 1 1 auto;
+  min-width: 750px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: linear-gradient(90deg, #fff 0%, #fff 84%, #eef1f6 100%);
+}
+```
+
+历史栏 header：
+
+```css
+.chat-sidebar-header {
+  height: 32px;
+  flex: 0 0 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #18365f;
+  margin-bottom: 16px;
+}
+
+.chat-sidebar-header strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+```
+
+互斥按钮统一样式：
+
+```css
+.chat-history-toggle-button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #4b5563;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.chat-history-toggle-button:hover {
+  background: #e5e7eb;
+  color: #2563eb;
+}
+
+.chat-history-toggle-button.is-mirrored svg {
+  transform: rotate(180deg);
+}
+```
+
+标题栏用 Flex 保持标题居中：
+
+```css
+.chat-header {
+  flex: 0 0 48px;
+  width: 100%;
+  border-bottom: 2px solid #2563eb;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+
+.chat-header-left,
+.chat-header-right {
+  flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+}
+
+.chat-header-left {
+  justify-content: flex-start;
+}
+
+.chat-header-right {
+  justify-content: flex-end;
+}
+
+.chat-header h1 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: #18365f;
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+```
+
+### 38.5 状态持久化
+
+本轮主导航收起状态不持久化。
+
+对话历史栏收起状态不持久化。
+
+每次刷新后：
+
+```txt
+系统主导航默认展开
+对话历史栏默认展开
+```
+
+后续如果要做刷新记忆，再单独加 `localStorage`。
+
+### 38.6 本轮不做的事
+
+这一轮只做：
+
+```txt
+系统主导航收起/展开
+对话历史栏互斥开关
+```
+
+不做：
+
+- 不改后端接口。
+- 不改消息发送逻辑。
+- 不改历史记录数据接口。
+- 不重写第 37 步滚动实现。
+- 不做移动端适配。
+- 不做快捷提问面板。
+- 不做分析过程展开。
+- 不做会话上下文菜单。
+
+### 38.7 构建命令
+
+进入前端目录：
+
+```bash
+cd frontend
+```
+
+执行：
+
+```bash
+pnpm build
+```
+
+如果当前环境里 `pnpm` 不可用，执行：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+### 38.8 验收标准
+
+完成第 38 步后，逐项确认：
+
+1. 最左侧系统主导航底部按钮可以收起主导航。
+2. 系统主导航收起过程有宽度动画。
+3. 系统主导航收起后宽度是窄栏，图标保留，文字隐藏。
+4. 系统主导航收起后，子菜单区域不展开，不挤占空间。
+5. 系统主导航收起后，底部按钮居中，箭头旋转。
+6. 再次点击底部按钮，系统主导航展开，文字恢复。
+7. 历史记录栏展开时，历史栏顶部右侧显示开关按钮。
+8. 历史记录栏展开时，对话标题栏左侧不显示这个开关按钮。
+9. 点击历史栏顶部右侧按钮后，历史记录栏收起。
+10. 历史记录栏收起过程有宽度和透明度动画。
+11. 历史记录栏收起后，右侧对话区占满释放出来的宽度。
+12. 历史记录栏收起时，对话标题栏左侧显示同一个开关按钮。
+13. 点击对话标题栏左侧按钮后，历史记录栏展开。
+14. 历史栏开关不会在两个位置同时出现。
+15. 两个位置的历史栏开关图标方向相反，呈 180 度镜像关系。
+16. 历史栏展开/收起时，当前会话和消息不丢失。
+17. 对话标题仍然视觉居中。
+18. 第 37 步已经修好的滚动效果不被破坏。
+19. 输入框仍然停在底部。
+20. `/settings` 和 `/feedbacks` 页面不被主导航收起功能破坏。
+21. 构建通过。
+
+你现在只做：
+
+1. 保留当前 Flex 布局。
+2. 不动第 37 步滚动实现。
+3. 补系统主导航 Flex 收起/展开。
+4. 补对话历史栏互斥开关。
+5. 执行构建。
+6. 截图确认按钮互斥出现并且能正常展开/收起。
+
+### 38.9 当前状态更新
+
+第 38 步已经完成。
+
+当前已完成：
+
+1. 系统主导航支持 Flex 收起/展开。
+2. 对话历史栏支持互斥开关。
+3. 历史栏展开时，开关显示在 `近30天记录` 顶部右侧。
+4. 历史栏收起时，开关显示在对话标题栏左侧。
+5. 两个位置不会同时出现历史栏开关。
+6. 两个位置的图标方向呈 180 度镜像关系。
+7. 第 37 步已修好的滚动效果保持不变。
+
+下一步处理会话标题生成逻辑。
+
+---
+
+## 第 39 步：首次提问后用第一句话覆盖默认会话标题
+
+这一轮只处理智能问数的会话标题。
+
+目标效果：
+
+```txt
+1. 用户点击“开启新对话”。
+2. 新会话先显示默认标题，例如“新的智能问数”。
+3. 用户发送第一条消息。
+4. 后端把这条用户消息内容生成会话标题。
+5. 历史记录里的标题从默认标题变成第一句话。
+6. 后续继续发送第二条、第三条消息时，标题不再变化。
+```
+
+举例：
+
+```txt
+新建会话标题：新的智能问数
+第一句话：帮我筛选政企行业收入3000万-5000万的数据，按收入从高到低排序
+历史记录标题：帮我筛选政企行业收入3000万-5000万的数据，按收入从高到低排序
+第二句话：再用饼图展示
+历史记录标题：不变
+```
+
+### 39.1 为什么放在后端做
+
+标题是会话数据的一部分。
+
+会话数据保存在数据库表：
+
+```txt
+chat_sessions
+```
+
+所以标题覆盖逻辑要放在后端接口里。
+
+不能只在前端临时改：
+
+```txt
+setSessions(...)
+```
+
+否则刷新页面后，标题还是数据库里的旧标题。
+
+当前前端发送消息后已经会用后端返回的 `ChatSession` 更新列表，所以只要后端把标题改好，前端历史记录会自动刷新。
+
+### 39.2 当前相关代码
+
+前端默认标题在：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+```
+
+当前类似：
+
+```tsx
+const newSessionTitle = "新的智能问数";
+```
+
+新建会话时：
+
+```tsx
+createSession(newSessionTitle)
+```
+
+后端创建会话在：
+
+```txt
+backend/app/routers/chat.py
+```
+
+当前类似：
+
+```py
+@router.post("", response_model=ChatSessionRead)
+def create_session(payload: ChatSessionCreate, db: Session = Depends(get_db)):
+    session = ChatSession(title=payload.title)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+```
+
+发送消息接口在：
+
+```py
+@router.post("/{session_id}/messages", response_model=ChatSessionRead)
+def send_message(...):
+    ...
+```
+
+标题覆盖逻辑就加在 `send_message` 里。
+
+### 39.3 后端标题生成规则
+
+规则：
+
+```txt
+如果当前会话还没有任何消息：
+    用本次用户输入内容生成标题
+否则：
+    不修改标题
+```
+
+判断是否第一条消息：
+
+```py
+existing_message = (
+    db.query(ChatMessage.id)
+    .filter(ChatMessage.session_id == session.id)
+    .first()
+)
+```
+
+如果 `existing_message is None`，说明这是当前会话第一条消息。
+
+### 39.4 新增标题处理函数
+
+在 `backend/app/routers/chat.py` 里加一个小函数：
+
+```py
+def _build_session_title(content: str) -> str:
+    title = " ".join(content.strip().split())
+    return title or "新的智能问数"
+```
+
+含义：
+
+1. `content.strip()` 去掉首尾空格。
+2. `.split()` 再 `" ".join(...)`，把连续空白压成单个空格。
+3. 不在后端做 UI 层面的打点省略。
+4. 极端情况下如果内容为空，仍然兜底为 `新的智能问数`。
+
+注意：
+
+接口前面已经会校验空内容或前端会 trim，但后端兜底更稳。
+
+标题在数据库里的字段是：
+
+```py
+title: Mapped[str] = mapped_column(String(200), nullable=False)
+```
+
+所以后端最多只需要考虑数据库字段长度兜底，不负责前端显示省略。
+
+如果后续担心用户第一句话超过 200 个字符，可以把函数改成：
+
+```py
+def _build_session_title(content: str) -> str:
+    title = " ".join(content.strip().split())
+    return (title or "新的智能问数")[:200]
+```
+
+这里的 `[:200]` 是为了避免超过数据库字段长度，不是为了 UI 打点。
+
+### 39.5 修改 `send_message`
+
+在创建 `user_message` 之前加：
+
+```py
+existing_message = (
+    db.query(ChatMessage.id)
+    .filter(ChatMessage.session_id == session.id)
+    .first()
+)
+
+if existing_message is None:
+    session.title = _build_session_title(payload.content)
+```
+
+整体位置：
+
+```py
+if payload.role != "user":
+    raise HTTPException(status_code=400, detail="only user messages can be sent")
+
+existing_message = (
+    db.query(ChatMessage.id)
+    .filter(ChatMessage.session_id == session.id)
+    .first()
+)
+
+if existing_message is None:
+    session.title = _build_session_title(payload.content)
+
+user_message = ChatMessage(
+    session_id=session.id,
+    role="user",
+    content=payload.content,
+)
+```
+
+这样第一次发送消息时，`session.title` 会和两条消息一起在同一次提交里保存。
+
+这里不需要再写：
+
+```py
+db.add(session)
+```
+
+原因：
+
+`session` 是前面通过查询拿到的：
+
+```py
+session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+```
+
+这个对象已经处在 SQLAlchemy 当前数据库会话 `db` 的管理中。
+
+所以当执行：
+
+```py
+session.title = _build_session_title(payload.content)
+```
+
+SQLAlchemy 会记录这个对象被修改了。
+
+后面执行：
+
+```py
+db.commit()
+```
+
+时，SQLAlchemy 会自动把 `session.title` 的变化更新到数据库。
+
+`db.add(...)` 主要用于：
+
+1. 新建对象，例如 `ChatMessage(...)`。
+2. 一个对象还没有被当前 `db` 追踪。
+
+这里的 `session` 已经被当前 `db` 追踪，所以不用再 `add`。
+
+### 39.6 前端不需要额外接口
+
+当前前端发送消息后已经做了：
+
+```tsx
+setSessions((currentSessions) => [
+  result.data,
+  ...currentSessions.filter((session) => session.id !== result.data.id),
+]);
+```
+
+`result.data` 是后端返回的更新后会话。
+
+所以只要后端返回的 `result.data.title` 已经变成第一句话，历史记录就会自动更新。
+
+前端最多只需要确认：
+
+1. 新建会话时继续使用默认标题。
+2. 发送第一条消息后，列表里显示后端返回的新标题。
+3. 后续发送消息不会再次改标题。
+4. 历史记录标题过长时，由前端 CSS 做单行省略。
+
+历史记录打点放在前端做。
+
+当前样式里应该保持类似：
+
+```css
+.chat-history-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+```
+
+原因：
+
+1. 后端保存的是数据本身。
+2. 前端决定数据怎么显示。
+3. 如果后端为了显示把标题截成 `xxx...`，原始标题就永久丢失了。
+4. 不同位置可能有不同宽度，应该由各自 UI 自己决定省略长度。
+
+### 39.7 本轮不做的事
+
+这一轮只做标题覆盖逻辑。
+
+不做：
+
+- 不改聊天 UI 样式。
+- 不改历史栏展开/收起。
+- 不改消息渲染。
+- 不改 AI 回复逻辑。
+- 不新增手动重命名会话功能。
+- 不新增删除会话功能。
+
+### 39.8 构建和检查
+
+后端先做语法检查：
+
+```bash
+cd backend
+python -m compileall app
+```
+
+前端如果没有改代码，可以不构建。
+
+如果顺手改了前端，再执行：
+
+```bash
+cd frontend
+pnpm build
+```
+
+或者：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+### 39.9 验收标准
+
+完成第 39 步后，确认：
+
+1. 点击 `开启新对话` 后，新会话标题先是默认标题。
+2. 新会话未发送消息前，历史记录显示默认标题。
+3. 输入第一句话并发送后，历史记录标题变成第一句话生成的标题。
+4. 标题会保存到数据库，刷新页面后仍然是第一句话标题。
+5. 第二次发送消息后，标题不再变化。
+6. 第三次发送消息后，标题仍然不变化。
+7. 如果第一句话很长，数据库里保存的是清理后的标题内容，不为了 UI 提前加 `...`。
+8. 历史记录里长标题由前端单行省略展示，不撑破历史记录。
+9. `python -m compileall app` 通过。
+
+你现在只做：
+
+1. 修改 `backend/app/routers/chat.py`。
+2. 增加 `_build_session_title`。
+3. 在 `send_message` 里判断第一条消息并覆盖标题。
+4. 执行后端语法检查。
+5. 在页面里手动验证一次新建会话和首次提问标题变化。
+
+### 39.10 当前状态更新
+
+第 39 步已经完成。
+
+当前已完成：
+
+1. 新建会话先显示默认标题。
+2. 首次发送消息后，会话标题改成第一句话。
+3. 后续继续发送消息时，标题不再变化。
+4. 标题持久化在数据库里。
+5. 历史记录长标题由前端单行省略展示，不由后端提前加 `...`。
+
+下一步处理历史记录项的更多操作。
+
+---
+
+## 第 40 步：历史记录项 hover 操作栏、重命名、置顶和删除
+
+这一轮处理智能问数左侧历史记录列表里的单条记录操作。
+
+目标效果：
+
+```txt
+鼠标 hover 到某一条历史记录上：右侧出现三个点按钮。
+鼠标继续 hover 到三个点按钮上：出现 tooltip 操作栏。
+操作栏包含：重命名、置顶/取消置顶、删除。
+```
+
+注意：
+
+原型里重命名和删除可能用了浏览器原生弹窗。
+
+本项目不要使用：
+
+```txt
+window.prompt
+window.confirm
+alert
+```
+
+重命名和删除都必须使用项目里已经抽离的弹窗组件：
+
+```txt
+frontend/src/components/AppModal.tsx
+```
+
+也就是基于 `AppModal` 新增业务弹窗组件。
+
+### 40.1 当前已有弹窗组件
+
+当前项目已经有通用弹窗：
+
+```txt
+frontend/src/components/AppModal.tsx
+```
+
+用法参考：
+
+```txt
+frontend/src/components/GreetingConfigModal.tsx
+frontend/src/components/HotRecommendConfigModal.tsx
+frontend/src/components/FeedbackHandleModal.tsx
+```
+
+`AppModal` 接收：
+
+```tsx
+type AppModalProps = {
+  title: string
+  width?: 'sm' | 'md' | 'lg'
+  children: ReactNode
+  footer: ReactNode
+  closeDisabled?: boolean
+  className?: string
+  onClose: () => void
+}
+```
+
+第 40 步新增的重命名和删除确认弹窗都用它。
+
+### 40.2 后端先补会话操作能力
+
+当前会话接口已有：
+
+```txt
+POST   /api/sessions
+GET    /api/sessions
+GET    /api/sessions/{session_id}
+POST   /api/sessions/{session_id}/messages
+```
+
+第 40 步新增：
+
+```txt
+PATCH  /api/sessions/{session_id}
+DELETE /api/sessions/{session_id}
+```
+
+`PATCH` 用于：
+
+```txt
+重命名
+置顶/取消置顶
+```
+
+`DELETE` 用于：
+
+```txt
+删除会话
+```
+
+### 40.3 数据模型增加置顶字段
+
+修改：
+
+```txt
+backend/app/models/chat.py
+```
+
+在 `ChatSession` 增加：
+
+```py
+pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+```
+
+同时需要补导入：
+
+```py
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+```
+
+注意：
+
+当前项目还没有迁移系统，数据库表是直接由 SQLAlchemy 模型创建的。
+
+如果本地数据库里已经有旧表，新增字段后可能需要：
+
+1. 手动 `ALTER TABLE` 加字段。
+2. 或者重建开发数据库。
+
+本轮 plan 里先按开发阶段处理。
+
+### 40.4 Schema 增加更新入参和返回字段
+
+修改：
+
+```txt
+backend/app/schemas/chat.py
+```
+
+新增：
+
+```py
+class ChatSessionUpdate(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
+```
+
+`ChatSessionRead` 增加：
+
+```py
+pinned: bool = False
+```
+
+这样前端能拿到会话是否置顶。
+
+### 40.5 后端列表排序规则
+
+历史记录列表排序改成：
+
+```txt
+置顶的在前
+同样置顶状态下，按 updated_at 倒序
+```
+
+也就是：
+
+```py
+.order_by(ChatSession.pinned.desc(), ChatSession.updated_at.desc())
+```
+
+这样置顶会话会稳定显示在历史记录顶部。
+
+### 40.6 后端 PATCH 接口
+
+修改：
+
+```txt
+backend/app/routers/chat.py
+```
+
+导入：
+
+```py
+from app.schemas.chat import ChatMessageCreate, ChatSessionCreate, ChatSessionRead, ChatSessionUpdate
+```
+
+新增接口：
+
+```py
+@router.patch("/{session_id}", response_model=ChatSessionRead)
+def update_session(
+    session_id: int,
+    payload: ChatSessionUpdate,
+    db: Session = Depends(get_db),
+):
+    session = _get_session_with_messages(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    if payload.title is not None:
+        title = " ".join(payload.title.strip().split())
+        if not title:
+            raise HTTPException(status_code=400, detail="title cannot be empty")
+        session.title = title[:200]
+
+    if payload.pinned is not None:
+        session.pinned = payload.pinned
+
+    session.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    updated_session = _get_session_with_messages(db, session.id)
+    if updated_session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return updated_session
+```
+
+这里 `title[:200]` 是数据库字段长度兜底，不是 UI 打点。
+
+### 40.7 后端 DELETE 接口
+
+新增：
+
+```py
+@router.delete("/{session_id}", status_code=204)
+def delete_session(session_id: int, db: Session = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    db.delete(session)
+    db.commit()
+    return None
+```
+
+因为 `ChatSession.messages` 已经配置了：
+
+```py
+cascade="all, delete-orphan"
+```
+
+删除会话时，属于这个会话的消息也会一起删除。
+
+### 40.8 前端 API 增加方法
+
+修改：
+
+```txt
+frontend/src/api/chat.ts
+```
+
+新增：
+
+```ts
+export type UpdateSessionPayload = {
+  title?: string
+  pinned?: boolean
+}
+
+export function updateSession(sessionId: number, payload: UpdateSessionPayload) {
+  return http.patch<ChatSession>(`/api/sessions/${sessionId}`, payload)
+}
+
+export function deleteSession(sessionId: number) {
+  return http.delete<void>(`/api/sessions/${sessionId}`)
+}
+```
+
+如果项目习惯把类型放在：
+
+```txt
+frontend/src/api/types.ts
+```
+
+也可以把 `UpdateSessionPayload` 放到那里。
+
+### 40.9 前端类型增加 pinned
+
+修改：
+
+```txt
+frontend/src/api/types.ts
+```
+
+`ChatSession` 增加：
+
+```ts
+pinned: boolean
+```
+
+### 40.10 历史记录项 hover 三点按钮
+
+修改：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+frontend/src/styles/chat.css
+```
+
+历史记录项结构从单纯文本按钮，改成左侧标题 + 右侧操作按钮。
+
+结构方向：
+
+```tsx
+<button
+  className={session.id === activeSessionId ? "chat-history-item active" : "chat-history-item"}
+  key={session.id}
+  type="button"
+  onClick={() => setSelectedSessionId(session.id)}
+>
+  {session.pinned && <Pin size={13} className="chat-history-pin" />}
+  <span>{session.title}</span>
+
+  <span className="chat-history-more-wrap" onClick={event => event.stopPropagation()}>
+    <button className="chat-history-more-button" type="button" aria-label="更多操作">
+      <MoreVertical size={16} />
+    </button>
+
+    <div className="chat-history-menu">
+      ...
+    </div>
+  </span>
+</button>
+```
+
+注意：
+
+外层已经是 `button` 时，里面不能再嵌套 `button`，HTML 语义不合法。
+
+所以最终实现时要二选一：
+
+1. 把历史记录项外层改成 `div role="button"`。
+2. 或者外层不再用 `button`，改成 `div`，内部标题区域负责选择会话，更多按钮负责菜单。
+
+第 40 步采用第二种：
+
+```tsx
+<div className="chat-history-item ..." role="button" tabIndex={0} onClick={...}>
+  ...
+  <button type="button" ...>
+    <MoreVertical />
+  </button>
+</div>
+```
+
+### 40.11 操作浮层显示规则
+
+CSS 规则：
+
+```txt
+hover 历史记录项：显示三个点按钮
+hover 三个点区域：显示操作浮层
+```
+
+样式：
+
+```css
+.chat-history-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-history-more-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-history-item:hover .chat-history-more-wrap {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-history-menu {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: 30;
+  min-width: 120px;
+  display: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 12%);
+  padding: 4px;
+}
+
+.chat-history-more-wrap:hover .chat-history-menu {
+  display: block;
+}
+```
+
+操作项：
+
+```txt
+重命名
+置顶 / 取消置顶
+删除
+```
+
+删除项用危险色。
+
+### 40.12 置顶操作
+
+点击置顶：
+
+```tsx
+await updateSession(session.id, { pinned: !session.pinned })
+```
+
+成功后：
+
+1. 用返回的会话更新 `sessions`。
+2. 重新排序，让置顶会话在上面。
+
+前端排序可以写一个 helper：
+
+```ts
+const sortSessions = (items: ChatSession[]) => {
+  return [...items].sort((prev, next) => {
+    if (prev.pinned !== next.pinned) {
+      return Number(next.pinned) - Number(prev.pinned)
+    }
+    return new Date(next.updated_at).getTime() - new Date(prev.updated_at).getTime()
+  })
+}
+```
+
+### 40.13 重命名弹窗
+
+新增组件：
+
+```txt
+frontend/src/components/RenameSessionModal.tsx
+```
+
+必须使用：
+
+```tsx
+import AppModal from './AppModal'
+```
+
+不使用：
+
+```txt
+window.prompt
+```
+
+弹窗内容：
+
+1. 标题：`重命名会话`
+2. 输入框：默认填入当前会话标题
+3. 取消按钮
+4. 确认按钮
+
+确认时：
+
+```tsx
+await updateSession(session.id, { title: renameTitle })
+```
+
+成功后：
+
+1. 更新 `sessions`。
+2. 关闭弹窗。
+3. 当前选中会话不变。
+
+### 40.14 删除确认弹窗
+
+新增组件：
+
+```txt
+frontend/src/components/DeleteSessionModal.tsx
+```
+
+必须使用：
+
+```tsx
+import AppModal from './AppModal'
+```
+
+不使用：
+
+```txt
+window.confirm
+```
+
+弹窗内容：
+
+1. 标题：`删除会话`
+2. 文案：`删除后，该会话及其消息记录将无法恢复。`
+3. 显示会话标题
+4. 取消按钮
+5. 删除按钮
+
+确认删除时：
+
+```tsx
+await deleteSession(session.id)
+```
+
+成功后：
+
+1. 从 `sessions` 里移除该会话。
+2. 如果删除的是当前选中会话，自动选中剩余列表第一条。
+3. 如果没有剩余会话，`selectedSessionId` 设为 `null`。
+4. 关闭弹窗。
+
+### 40.15 ChatPage 需要新增的状态
+
+在 `ChatPage.tsx` 增加：
+
+```tsx
+const [renamingSession, setRenamingSession] = useState<ChatSession | null>(null)
+const [deletingSession, setDeletingSession] = useState<ChatSession | null>(null)
+const [sessionActionLoading, setSessionActionLoading] = useState(false)
+```
+
+用途：
+
+1. `renamingSession` 控制重命名弹窗。
+2. `deletingSession` 控制删除确认弹窗。
+3. `sessionActionLoading` 控制按钮 loading/disabled。
+
+### 40.16 本轮不做的事
+
+这一轮只做历史记录项操作。
+
+不做：
+
+- 不改消息发送逻辑。
+- 不改首次提问生成标题逻辑。
+- 不改历史栏展开/收起逻辑。
+- 不做拖拽排序。
+- 不做批量删除。
+- 不做移动端适配。
+
+### 40.17 构建和检查
+
+后端检查：
+
+```bash
+cd backend
+python -m compileall app
+```
+
+前端构建：
+
+```bash
+cd frontend
+pnpm build
+```
+
+如果 `pnpm` 不可用：
+
+```bash
+node_modules/.bin/tsc -b
+node_modules/.bin/vite build
+```
+
+### 40.18 验收标准
+
+完成第 40 步后，确认：
+
+1. 鼠标 hover 历史记录项时，右侧出现三个点按钮。
+2. 鼠标移开历史记录项时，三个点按钮隐藏。
+3. 鼠标 hover 三个点按钮区域时，出现操作浮层。
+4. 操作浮层包含：重命名、置顶/取消置顶、删除。
+5. 点击重命名，打开基于 `AppModal` 的重命名弹窗。
+6. 重命名确认后，历史记录标题更新并保存到数据库。
+7. 点击置顶后，该会话移动到历史记录顶部。
+8. 已置顶会话显示置顶状态，再次点击可取消置顶。
+9. 点击删除，打开基于 `AppModal` 的删除确认弹窗。
+10. 删除确认后，该会话从历史记录消失。
+11. 删除当前会话后，自动选中下一条可用会话。
+12. 删除最后一条会话后，页面进入无会话状态。
+13. 不出现浏览器原生 `prompt` / `confirm` / `alert`。
+14. `python -m compileall app` 通过。
+15. 前端构建通过。
+
+你现在只做：
+
+1. 修改后端会话模型、schema 和 router。
+2. 修改前端 chat API 和类型。
+3. 在历史记录项上补 hover 三点和操作浮层。
+4. 新增基于 `AppModal` 的重命名弹窗。
+5. 新增基于 `AppModal` 的删除确认弹窗。
+6. 执行后端检查和前端构建。
+
+## Handoff：2026-07-02 晚间交接
+
+### 当前整体状态
+
+项目继续按“智能运营平台 / 智能问数”这个方向推进。
+
+今天主要完成的是前端整体框架、侧边栏交互、聊天页布局修复，以及后端“首条用户消息生成会话标题”的逻辑。
+
+当前代码已经从早期简单页面，推进到更接近原型的后台系统结构：
+
+1. 外层已经有统一 `layout`。
+2. 顶部已经有 Nav Bar。
+3. 左侧主导航已经按原型还原，并支持父节点展开/收起。
+4. 左侧主导航整体也支持收起/展开动画。
+5. 智能问数页中，历史记录侧边栏已经支持收起/展开。
+6. 聊天消息区域和输入框滚动问题已由用户按自己的方式修好。
+7. 新建会话时先使用默认标题，用户发送第一条消息后，后端会用第一条用户消息覆盖默认标题。
+8. 第 40 步计划已经写好，下一步做历史记录项 hover 操作栏。
+
+### 今天完成的关键文件
+
+#### 1. 前端 layout
+
+文件：
+
+```txt
+frontend/src/layout/index.tsx
+frontend/src/styles/layout.css
+frontend/src/App.tsx
+frontend/src/index.css
+```
+
+当前状态：
+
+1. `App.tsx` 已经把页面路由包在 `Layout` 里面。
+2. `Layout` 文件放在 `frontend/src/layout/index.tsx`。
+3. 顶部 Nav Bar 已经完成。
+4. 左侧主导航已经包含：
+   - 智能问数
+   - 系统管理
+   - 应用配置
+   - 反馈管理
+   - 回复校对
+5. 系统管理、反馈管理父节点可点击展开/收起。
+6. 左侧主导航底部有整体收起按钮。
+7. 用户明确要求：
+   - 这个目录就叫 `layout`。
+   - 不再叫 `AppShell`。
+   - `layout` 里面放 `index.tsx` 就行。
+   - 不考虑移动端。
+
+后续注意：
+
+不要把这里再改回移动端适配方案。
+不要把用户已经确认的 Flex 页面结构改回其他布局。
+
+#### 2. 智能问数页布局和历史栏
+
+文件：
+
+```txt
+frontend/src/pages/ChatPage.tsx
+frontend/src/styles/chat.css
+```
+
+当前状态：
+
+1. 聊天页整体已经使用 Flex 结构。
+2. 历史记录侧边栏支持收起/展开。
+3. 历史记录栏展开时，收起按钮在历史记录标题右侧。
+4. 历史记录栏收起后，展开按钮出现在对话容器顶部左侧。
+5. 两个按钮使用不同方向的图标，表现为 180 度镜像。
+6. 输入框滚动问题已经由用户修好：
+   - 消息区域自己滚动。
+   - 输入框始终显示在底部。
+   - 不要再覆盖用户这块代码。
+
+后续注意：
+
+第 40 步只做历史记录项的更多操作，不要顺手改聊天区域滚动结构。
+
+#### 3. 会话标题逻辑
+
+文件：
+
+```txt
+backend/app/routers/chat.py
+```
+
+当前状态：
+
+1. 后端新增了 `_build_session_title(content, default)`。
+2. 发送消息时，会先查询当前会话是否已有消息。
+3. 如果该会话还没有消息，就用第一条用户消息生成标题。
+4. 标题生成逻辑：
+
+```py
+title = " ".join(content.strip().split())
+return (title or default)[:200]
+```
+
+含义：
+
+1. `content.strip()` 去掉首尾空白。
+2. `.split()` 按任意空白拆分，并自动压缩连续空格、换行、tab。
+3. `" ".join(...)` 再用单个空格拼回去。
+4. 如果处理后为空，就继续用默认标题。
+5. `[:200]` 是为了不超过数据库 `String(200)` 的长度。
+
+重要解释：
+
+`session` 是从数据库查出来的 SQLAlchemy ORM 对象，已经被当前 `db` 会话追踪。
+
+所以：
+
+```py
+session.title = ...
+```
+
+之后不需要再写：
+
+```py
+db.add(session)
+```
+
+后面执行 `db.commit()` 时，SQLAlchemy 会把这个已追踪对象的变化同步到数据库。
+
+### 明天从哪里继续
+
+明天继续做：
+
+```txt
+第 40 步：历史记录项 hover 操作栏、重命名、置顶和删除
+```
+
+第 40 步已经在上面写好了完整计划。
+
+核心目标：
+
+1. 历史记录项默认只显示标题。
+2. 鼠标 hover 某条历史记录时，右侧出现三个点按钮。
+3. 鼠标继续 hover 到三个点按钮区域时，出现操作浮层。
+4. 操作浮层包含：
+   - 重命名
+   - 置顶 / 取消置顶
+   - 删除
+5. 点击重命名时，打开项目里抽离出来的 `AppModal`。
+6. 点击删除时，也打开项目里抽离出来的 `AppModal`。
+7. 不使用浏览器原生 `prompt` / `confirm` / `alert`。
+
+### 第 40 步实现提醒
+
+#### 后端
+
+需要补：
+
+1. `ChatSession.pinned` 字段。
+2. `ChatSessionUpdate` schema。
+3. `ChatSessionRead` 增加 `pinned`。
+4. `GET /api/sessions` 排序改为：
+   - 置顶在前。
+   - 同置顶状态下按 `updated_at` 倒序。
+5. 新增：
+
+```txt
+PATCH /api/sessions/{session_id}
+DELETE /api/sessions/{session_id}
+```
+
+当前项目还没有 Alembic，新增 `pinned` 字段后，已有本地数据库需要手动处理：
+
+```sql
+ALTER TABLE chat_sessions
+ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT FALSE;
+```
+
+如果是全新数据库，直接重新初始化表即可。
+
+#### 前端
+
+需要补：
+
+1. `frontend/src/api/types.ts` 给 `ChatSession` 增加 `pinned`。
+2. `frontend/src/api/chat.ts` 增加：
+
+```ts
+updateSession(...)
+deleteSession(...)
+```
+
+3. 历史记录项不要再只用简单 button 写到底。
+4. 如果历史记录项里要放三个点按钮，避免 button 里面套 button。
+5. 重命名弹窗和删除弹窗要复用：
+
+```txt
+frontend/src/components/AppModal.tsx
+```
+
+6. 删除当前会话后，需要自动选中剩余会话第一条。
+7. 删除最后一条会话后，进入无会话状态。
+
+### 不要改动的部分
+
+明天做第 40 步时，不要顺手改这些：
+
+1. 不改用户已经修好的聊天页滚动结构。
+2. 不改输入框固定在底部的实现。
+3. 不改主导航 layout 的命名和目录结构。
+4. 不重新做移动端适配。
+5. 不把 `AppModal` 换成原生弹窗。
+6. 不把历史记录栏的互斥收起/展开按钮拆回两个长期同时存在的按钮。
+
+### 明天启动和检查命令
+
+后端：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m compileall app
+uvicorn app.main:app --reload
+```
+
+前端：
+
+```bash
+cd frontend
+pnpm install
+pnpm build
+pnpm dev
+```
+
+数据库：
+
+```bash
+docker compose up -d postgres
+docker compose exec postgres psql -U archer -d fullstack_demo
+```
+
+常用检查：
+
+```bash
+\dt
+select id, title, updated_at from chat_sessions order by updated_at desc;
+select id, session_id, role, content from chat_messages order by id;
+```

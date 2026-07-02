@@ -20,6 +20,11 @@ def _get_session_with_messages(db: Session, session_id: int) -> ChatSession | No
     )
 
 
+def _build_session_title(content: str, default: str) -> str:
+    title = " ".join(content.strip().split())
+    return (title or default)[:200]
+
+
 @router.post("", response_model=ChatSessionRead)
 def create_session(payload: ChatSessionCreate, db: Session = Depends(get_db)):
     session = ChatSession(title=payload.title)
@@ -59,6 +64,14 @@ def send_message(
 
     if payload.role != "user":
         raise HTTPException(status_code=400, detail="only user messages can be sent")
+
+    # 判断一下，没有消息才用第一条user的内容去更新标题
+    existing_first_user_message = (
+        db.query(ChatMessage.id).filter(ChatMessage.session_id == session.id).first()
+    )
+
+    if existing_first_user_message is None:
+        session.title = _build_session_title(payload.content, session.title)
 
     user_message = ChatMessage(
         session_id=session.id,
