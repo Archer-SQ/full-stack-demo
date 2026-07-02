@@ -19588,3 +19588,2110 @@ push 前自动跑 pnpm check。
 11. `.husky/pre-push` 存在，并执行 `pnpm frontend:check`。
 12. `.github/workflows/frontend-check.yml` 存在。
 13. GitHub Actions 里会执行 `pnpm check`。
+
+## 第 42 步：后端测试和接口校验
+
+第 41 步已经把前端测试基本接起来了。
+
+第 42 步开始补后端测试。
+
+后端测试和前端测试最大的区别是：
+
+```txt
+前端测试：
+  主要验证组件、交互、请求函数。
+  多数情况下不需要真实后端。
+
+后端测试：
+  主要验证接口、数据库写入、数据库读取、异常状态码。
+  通常需要一个独立的测试数据库。
+```
+
+这一轮先不把测试做得很复杂。
+
+目标是：
+
+```txt
+用 pytest + FastAPI TestClient 测三个页面的核心接口。
+用独立 PostgreSQL 测试库，不污染开发库。
+把后端测试接进本地 check 和 GitHub Actions。
+```
+
+### 42.1 这一轮要测什么
+
+这一轮后端测试要覆盖三个页面：
+
+```txt
+智能问数页
+应用配置页
+回复校对页
+```
+
+对应后端就是三组 router：
+
+```txt
+chat.py
+settings.py
+feedbacks.py
+```
+
+第一组：智能问数页，对应 `chat.py`：
+
+```txt
+POST   /api/sessions
+GET    /api/sessions
+GET    /api/sessions/{session_id}
+PATCH  /api/sessions/{session_id}
+DELETE /api/sessions/{session_id}
+POST   /api/sessions/{session_id}/messages
+```
+
+这些接口覆盖了当前前端正在用的主要能力：
+
+```txt
+创建会话
+读取历史记录
+读取单个会话
+发送用户消息
+生成 mock AI 回复
+第一条用户消息覆盖默认标题
+重命名会话
+置顶会话
+删除会话
+```
+
+第二组：应用配置页，对应 `settings.py`：
+
+```txt
+GET   /api/settings
+PATCH /api/settings/{code}
+```
+
+这些接口覆盖：
+
+```txt
+读取应用配置列表
+更新某个配置的 enabled
+更新某个配置的 config
+配置不存在时返回 404
+```
+
+第三组：回复校对页，对应 `feedbacks.py`：
+
+```txt
+POST  /api/feedbacks
+GET   /api/feedbacks
+GET   /api/feedbacks/{feedback_id}
+PATCH /api/feedbacks/{feedback_id}
+```
+
+这些接口覆盖：
+
+```txt
+创建一条待处理反馈
+分页读取反馈列表
+按问题关键字筛选
+按用户筛选
+按状态筛选
+读取反馈详情
+把反馈处理为 resolved
+把反馈改回 pending
+保存处理备注
+```
+
+所以第 42 步不是只测聊天接口，而是按三个页面拆成三组测试。
+
+文件也按页面拆开：
+
+```txt
+test_chat_api.py
+test_settings_api.py
+test_feedback_api.py
+```
+
+这样后面哪个页面出问题，就看对应测试文件。
+
+暂时不测：
+
+```txt
+真实 AI
+浏览器 E2E
+覆盖率阈值
+```
+
+原因很简单：
+
+```txt
+现在先测三个页面的核心业务。
+不把真实 AI、浏览器自动化、覆盖率门槛一起塞进来。
+```
+
+### 42.2 后端测试用什么工具
+
+这一步用：
+
+```txt
+pytest
+FastAPI TestClient
+httpx
+SQLAlchemy
+PostgreSQL 测试库
+```
+
+分别解释一下。
+
+`pytest`：
+
+```txt
+Python 里最常用的测试框架。
+负责发现 test_ 开头的测试文件和测试函数，然后执行它们。
+```
+
+`FastAPI TestClient`：
+
+```txt
+FastAPI 提供的测试客户端。
+它可以在不启动 uvicorn 的情况下，直接请求 FastAPI app。
+```
+
+也就是说，测试里可以这样写：
+
+```py
+response = client.post("/api/sessions", json={"title": "新的智能问数"})
+```
+
+它看起来像真的 HTTP 请求。
+
+但实际上：
+
+```txt
+没有打开浏览器。
+没有启动 8000 端口。
+没有真的走网络。
+```
+
+它是直接调用 FastAPI 应用内部的路由逻辑。
+
+`httpx`：
+
+```txt
+TestClient 底层依赖的 HTTP 客户端库。
+不直接写 httpx 代码，但需要安装它。
+```
+
+`SQLAlchemy`：
+
+```txt
+项目当前 ORM。
+测试时用它创建测试数据库连接、建表、清表。
+```
+
+`PostgreSQL 测试库`：
+
+```txt
+专门给测试用的数据库。
+每次测试前清空并重新建表。
+```
+
+### 42.3 为什么后端测试不要直接用开发数据库
+
+不要让测试直接连现在开发用的：
+
+```txt
+fullstack_demo
+```
+
+原因：
+
+```txt
+测试会创建数据。
+测试会删除数据。
+测试为了保证结果稳定，经常会清空表。
+```
+
+如果直接连开发库，可能把你手动调接口产生的数据清掉。
+
+所以要单独建一个：
+
+```txt
+fullstack_demo_test
+```
+
+开发库：
+
+```txt
+fullstack_demo
+  给你平时启动后端、Swagger 调接口、前端联调用。
+```
+
+测试库：
+
+```txt
+fullstack_demo_test
+  只给 pytest 用。
+  可以随时 drop table、create table。
+  数据丢了也无所谓。
+```
+
+### 42.4 为什么这里不建议用 SQLite 内存数据库
+
+很多教程会用：
+
+```txt
+sqlite:///:memory:
+```
+
+但是这个项目不适合直接这么做。
+
+因为当前模型里用了 PostgreSQL 专属字段：
+
+```py
+from sqlalchemy.dialects.postgresql import JSONB
+```
+
+例如：
+
+```py
+answer_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+config: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+```
+
+`JSONB` 是 PostgreSQL 的类型。
+
+SQLite 没有真正的 `JSONB`。
+
+如果强行用 SQLite，会有两个问题：
+
+```txt
+1. 建表可能失败。
+2. 即使绕过去，也测不到 PostgreSQL 真实行为。
+```
+
+所以这一步用 PostgreSQL 测试库。
+
+这样虽然多一步数据库准备，但更接近真实项目。
+
+### 42.5 添加后端测试依赖
+
+新增文件：
+
+```txt
+backend/requirements-dev.txt
+```
+
+内容：
+
+```txt
+-r requirements.txt
+pytest
+httpx
+```
+
+解释：
+
+```txt
+-r requirements.txt
+  表示先安装后端正式依赖。
+
+pytest
+  测试框架。
+
+httpx
+  FastAPI TestClient 底层需要。
+```
+
+安装命令：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+```
+
+这里用 `requirements-dev.txt` 的原因是：
+
+```txt
+requirements.txt
+  放运行项目必须要的依赖。
+
+requirements-dev.txt
+  放开发和测试时才需要的依赖。
+```
+
+比如 `pytest` 只在开发测试时需要。
+
+线上运行后端服务不一定需要它。
+
+### 42.6 准备 PostgreSQL 测试数据库
+
+先确认数据库容器启动：
+
+```bash
+docker compose up -d postgres
+```
+
+然后创建测试数据库：
+
+```bash
+docker compose exec postgres createdb -U archer fullstack_demo_test
+```
+
+如果提示：
+
+```txt
+database "fullstack_demo_test" already exists
+```
+
+说明之前已经创建过。
+
+可以不用管。
+
+如果想重建测试库，可以执行：
+
+```bash
+docker compose exec postgres dropdb -U archer --if-exists fullstack_demo_test
+docker compose exec postgres createdb -U archer fullstack_demo_test
+```
+
+注意：
+
+```txt
+这里只能删 fullstack_demo_test。
+不要删 fullstack_demo。
+```
+
+测试库连接地址是：
+
+```txt
+postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test
+```
+
+和开发库的区别只有数据库名：
+
+```txt
+开发库：fullstack_demo
+测试库：fullstack_demo_test
+```
+
+### 42.7 新建测试目录结构
+
+新增：
+
+```txt
+backend/tests/
+backend/tests/conftest.py
+backend/tests/test_chat_api.py
+backend/tests/test_settings_api.py
+backend/tests/test_feedback_api.py
+```
+
+目录含义：
+
+```txt
+tests/
+  放后端测试代码。
+
+conftest.py
+  pytest 的公共配置文件。
+  这里放测试数据库连接、建表、TestClient。
+
+test_chat_api.py
+  专门测试聊天会话接口。
+
+test_settings_api.py
+  专门测试应用配置接口。
+
+test_feedback_api.py
+  专门测试回复校对接口。
+```
+
+`conftest.py` 是 pytest 的特殊文件。
+
+它里面定义的 fixture，可以在测试函数里直接使用。
+
+比如测试函数写：
+
+```py
+def test_create_session(client):
+    ...
+```
+
+这里的 `client` 不需要手动 import。
+
+pytest 会自动从 `conftest.py` 里找到它。
+
+### 42.8 编写 conftest.py
+
+新增文件：
+
+```txt
+backend/tests/conftest.py
+```
+
+代码：
+
+```py
+import os
+from collections.abc import Generator
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.db.base import Base
+from app.db.session import get_db
+from app.main import app
+from app.models import AppSetting, ChatMessage, ChatSession, Feedback  # noqa: F401
+
+
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test",
+)
+
+test_engine = create_engine(TEST_DATABASE_URL, echo=False)
+TestingSessionLocal = sessionmaker(
+    bind=test_engine,
+    autoflush=False,
+    autocommit=False,
+)
+
+
+@pytest.fixture()
+def db_session() -> Generator[Session, None, None]:
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
+
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=test_engine)
+
+
+@pytest.fixture()
+def client(db_session: Session) -> Generator[TestClient, None, None]:
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+    app.dependency_overrides.clear()
+```
+
+这一段很重要，拆开解释。
+
+#### 42.8.1 TEST_DATABASE_URL
+
+```py
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test",
+)
+```
+
+含义：
+
+```txt
+如果环境变量里有 TEST_DATABASE_URL，就用环境变量。
+如果没有，就用本地默认测试库地址。
+```
+
+本地跑测试时，一般不用传环境变量。
+
+GitHub Actions 跑测试时，可以显式传：
+
+```txt
+TEST_DATABASE_URL=postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test
+```
+
+这样本地和 CI 都能用同一套测试代码。
+
+#### 42.8.2 test_engine
+
+```py
+test_engine = create_engine(TEST_DATABASE_URL, echo=False)
+```
+
+这个是测试专用数据库 engine。
+
+不要用 `app.db.session` 里的 `engine`。
+
+因为原来的 `engine` 默认连的是开发库：
+
+```txt
+fullstack_demo
+```
+
+测试这里要连：
+
+```txt
+fullstack_demo_test
+```
+
+#### 42.8.3 TestingSessionLocal
+
+```py
+TestingSessionLocal = sessionmaker(
+    bind=test_engine,
+    autoflush=False,
+    autocommit=False,
+)
+```
+
+这个是测试专用 Session 工厂。
+
+接口里平时用的是：
+
+```py
+SessionLocal
+```
+
+测试里用：
+
+```py
+TestingSessionLocal
+```
+
+这样测试的数据库读写就不会跑到开发库。
+
+#### 42.8.4 db_session fixture
+
+```py
+@pytest.fixture()
+def db_session() -> Generator[Session, None, None]:
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
+
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=test_engine)
+```
+
+这段负责每个测试函数开始前：
+
+```txt
+删除测试库里的表
+重新创建测试库里的表
+创建一个数据库 session
+```
+
+测试函数结束后：
+
+```txt
+关闭 session
+删除测试库里的表
+```
+
+这样每个测试都是干净的。
+
+例如：
+
+```txt
+test_create_session 创建了 id=1 的会话。
+test_delete_session 不会受到上一条数据影响。
+```
+
+#### 42.8.5 为什么要 import models
+
+```py
+from app.models import AppSetting, ChatMessage, ChatSession, Feedback  # noqa: F401
+```
+
+这行看起来没有直接用。
+
+但是它很重要。
+
+原因是：
+
+```txt
+SQLAlchemy 的 Base.metadata 需要知道有哪些模型。
+模型被 import 之后，表结构才会注册到 Base.metadata 里。
+```
+
+如果不 import 模型，可能出现：
+
+```txt
+Base.metadata.create_all 执行了，但没有创建表。
+```
+
+`# noqa: F401` 的意思是：
+
+```txt
+告诉 lint：我知道这些 import 看起来没用，但这里是故意的。
+```
+
+#### 42.8.6 client fixture
+
+```py
+@pytest.fixture()
+def client(db_session: Session) -> Generator[TestClient, None, None]:
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+    app.dependency_overrides.clear()
+```
+
+后端接口里现在大量使用：
+
+```py
+db: Session = Depends(get_db)
+```
+
+正常启动服务时，`get_db` 会创建开发库 session。
+
+测试时不能用开发库 session。
+
+所以这里用：
+
+```py
+app.dependency_overrides[get_db] = override_get_db
+```
+
+意思是：
+
+```txt
+测试期间，只要接口想调用 get_db，
+就改用 override_get_db。
+```
+
+而 `override_get_db` 返回的是：
+
+```txt
+db_session
+```
+
+也就是测试库 session。
+
+这就是 FastAPI 测试里非常常用的依赖替换。
+
+### 42.9 编写 chat API 测试
+
+新增文件：
+
+```txt
+backend/tests/test_chat_api.py
+```
+
+代码：
+
+```py
+from fastapi.testclient import TestClient
+
+
+def create_session(client: TestClient, title: str = "新的智能问数") -> dict:
+    response = client.post("/api/sessions", json={"title": title})
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_create_session(client: TestClient):
+    data = create_session(client)
+
+    assert data["title"] == "新的智能问数"
+    assert data["pinned"] is False
+    assert data["messages"] == []
+    assert "id" in data
+    assert "created_at" in data
+    assert "updated_at" in data
+
+
+def test_list_sessions_returns_created_sessions(client: TestClient):
+    first = create_session(client, "第一个会话")
+    second = create_session(client, "第二个会话")
+
+    response = client.get("/api/sessions")
+
+    assert response.status_code == 200
+    data = response.json()
+    ids = [item["id"] for item in data]
+
+    assert second["id"] in ids
+    assert first["id"] in ids
+
+
+def test_get_session_by_id(client: TestClient):
+    session = create_session(client, "会话详情")
+
+    response = client.get(f"/api/sessions/{session['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == session["id"]
+    assert data["title"] == "会话详情"
+
+
+def test_send_first_message_updates_default_title(client: TestClient):
+    session = create_session(client)
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={
+            "role": "user",
+            "content": "  2026年各经营单元的收入和完成率分别是多少？  ",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["title"] == "2026年各经营单元的收入和完成率分别是多少？"
+    assert len(data["messages"]) == 2
+    assert data["messages"][0]["role"] == "user"
+    assert data["messages"][0]["content"] == "  2026年各经营单元的收入和完成率分别是多少？  "
+    assert data["messages"][1]["role"] == "assistant"
+    assert data["messages"][1]["answer_data"] is not None
+
+
+def test_send_second_message_does_not_change_title(client: TestClient):
+    session = create_session(client)
+
+    first_response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={
+            "role": "user",
+            "content": "政企行业收入筛选",
+        },
+    )
+    first_title = first_response.json()["title"]
+
+    second_response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={
+            "role": "user",
+            "content": "产品型号销售统计",
+        },
+    )
+
+    assert second_response.status_code == 200
+    data = second_response.json()
+    assert data["title"] == first_title
+    assert len(data["messages"]) == 4
+
+
+def test_send_message_rejects_non_user_role(client: TestClient):
+    session = create_session(client)
+
+    response = client.post(
+        f"/api/sessions/{session['id']}/messages",
+        json={
+            "role": "assistant",
+            "content": "这条消息不应该由前端直接发送",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "only user messages can be sent"
+
+
+def test_update_session_title_and_pinned(client: TestClient):
+    session = create_session(client)
+
+    response = client.patch(
+        f"/api/sessions/{session['id']}",
+        json={
+            "title": "  政企行业收入筛选  ",
+            "pinned": True,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "政企行业收入筛选"
+    assert data["pinned"] is True
+
+
+def test_update_session_rejects_empty_title(client: TestClient):
+    session = create_session(client)
+
+    response = client.patch(
+        f"/api/sessions/{session['id']}",
+        json={"title": "   "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "title cannot be empty"
+
+
+def test_pinned_session_is_listed_first(client: TestClient):
+    normal_session = create_session(client, "普通会话")
+    pinned_session = create_session(client, "置顶会话")
+
+    client.patch(
+        f"/api/sessions/{pinned_session['id']}",
+        json={"pinned": True},
+    )
+
+    response = client.get("/api/sessions")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data[0]["id"] == pinned_session["id"]
+    assert data[0]["pinned"] is True
+    assert normal_session["id"] in [item["id"] for item in data]
+
+
+def test_delete_session(client: TestClient):
+    session = create_session(client, "准备删除的会话")
+
+    delete_response = client.delete(f"/api/sessions/{session['id']}")
+
+    assert delete_response.status_code == 204
+    assert delete_response.content == b""
+
+    get_response = client.get(f"/api/sessions/{session['id']}")
+
+    assert get_response.status_code == 404
+    assert get_response.json()["detail"] == "session not found"
+```
+
+### 42.10 编写 settings API 测试
+
+新增文件：
+
+```txt
+backend/tests/test_settings_api.py
+```
+
+应用配置页要测的是：
+
+```txt
+GET   /api/settings
+PATCH /api/settings/{code}
+```
+
+这里有一个点要注意：
+
+```txt
+settings 没有 POST 创建接口。
+真实业务里配置数据是通过 seed 脚本初始化的。
+```
+
+所以测试里不通过 API 创建配置，而是直接用 `db_session` 往测试数据库插入配置。
+
+代码：
+
+```py
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.models import AppSetting
+
+
+def create_setting(
+    db_session: Session,
+    code: str = "greeting",
+    name: str = "对话开场白",
+    enabled: bool = True,
+    config: dict | None = None,
+) -> AppSetting:
+    setting = AppSetting(
+        code=code,
+        name=name,
+        description=f"{name}说明",
+        enabled=enabled,
+        config={} if config is None else config,
+    )
+    db_session.add(setting)
+    db_session.commit()
+    db_session.refresh(setting)
+    return setting
+
+
+def test_list_settings(client: TestClient, db_session: Session):
+    first = create_setting(
+        db_session,
+        code="greeting",
+        name="对话开场白",
+        config={"text": "欢迎使用智能AI问数"},
+    )
+    second = create_setting(
+        db_session,
+        code="tts",
+        name="文字转语音",
+        enabled=False,
+    )
+
+    response = client.get("/api/settings")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert data[0]["id"] == first.id
+    assert data[0]["code"] == "greeting"
+    assert data[0]["config"]["text"] == "欢迎使用智能AI问数"
+    assert data[1]["id"] == second.id
+    assert data[1]["code"] == "tts"
+    assert data[1]["enabled"] is False
+
+
+def test_update_setting_enabled_and_config(client: TestClient, db_session: Session):
+    create_setting(
+        db_session,
+        code="hot_recommend",
+        name="常问设置",
+        enabled=True,
+        config={"threshold": 3},
+    )
+
+    response = client.patch(
+        "/api/settings/hot_recommend",
+        json={
+            "enabled": False,
+            "config": {"threshold": 5},
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["code"] == "hot_recommend"
+    assert data["enabled"] is False
+    assert data["config"] == {"threshold": 5}
+
+
+def test_update_setting_can_only_change_enabled(client: TestClient, db_session: Session):
+    create_setting(
+        db_session,
+        code="suggestions",
+        name="下一步问题建议",
+        enabled=False,
+        config={"max": 3},
+    )
+
+    response = client.patch(
+        "/api/settings/suggestions",
+        json={"enabled": True},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["config"] == {"max": 3}
+
+
+def test_update_setting_can_only_change_config(client: TestClient, db_session: Session):
+    create_setting(
+        db_session,
+        code="model_config",
+        name="模型配置",
+        enabled=True,
+        config={"model_name": "mock-analysis-v1"},
+    )
+
+    response = client.patch(
+        "/api/settings/model_config",
+        json={"config": {"model_name": "mock-analysis-v2"}},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["config"] == {"model_name": "mock-analysis-v2"}
+
+
+def test_update_setting_returns_404_when_code_not_found(client: TestClient):
+    response = client.patch(
+        "/api/settings/not-exist",
+        json={"enabled": True},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "setting not found"
+```
+
+### 42.11 编写 feedback API 测试
+
+新增文件：
+
+```txt
+backend/tests/test_feedback_api.py
+```
+
+回复校对页要测的是：
+
+```txt
+POST  /api/feedbacks
+GET   /api/feedbacks
+GET   /api/feedbacks/{feedback_id}
+PATCH /api/feedbacks/{feedback_id}
+```
+
+和 settings 不一样，feedback 本身有创建接口。
+
+所以测试里直接用：
+
+```txt
+POST /api/feedbacks
+```
+
+创建测试数据。
+
+代码：
+
+```py
+from fastapi.testclient import TestClient
+
+
+def create_feedback(
+    client: TestClient,
+    user_name: str = "张三",
+    question: str = "北京代表处收入是多少？",
+    ai_answer: str = "北京代表处收入为 7950 万元。",
+) -> dict:
+    response = client.post(
+        "/api/feedbacks",
+        json={
+            "user_name": user_name,
+            "question": question,
+            "ai_answer": ai_answer,
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_create_feedback(client: TestClient):
+    data = create_feedback(client)
+
+    assert data["user_name"] == "张三"
+    assert data["question"] == "北京代表处收入是多少？"
+    assert data["ai_answer"] == "北京代表处收入为 7950 万元。"
+    assert data["status"] == "pending"
+    assert data["remark"] is None
+    assert data["handled_at"] is None
+    assert "id" in data
+    assert "created_at" in data
+
+
+def test_list_feedbacks_with_pagination(client: TestClient):
+    create_feedback(client, question="北京代表处收入是多少？")
+    create_feedback(client, question="上海代表处收入是多少？")
+    create_feedback(client, question="浙江代表处收入是多少？")
+
+    response = client.get("/api/feedbacks?page=1&page_size=2")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 3
+    assert data["page"] == 1
+    assert data["page_size"] == 2
+    assert len(data["items"]) == 2
+
+
+def test_filter_feedbacks_by_question(client: TestClient):
+    matched = create_feedback(client, question="北京代表处收入是多少？")
+    create_feedback(client, question="上海代表处收入是多少？")
+
+    response = client.get("/api/feedbacks?question=北京")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == matched["id"]
+
+
+def test_filter_feedbacks_by_user(client: TestClient):
+    matched = create_feedback(client, user_name="李四")
+    create_feedback(client, user_name="王五")
+
+    response = client.get("/api/feedbacks?user=李四")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == matched["id"]
+
+
+def test_filter_feedbacks_by_status(client: TestClient):
+    pending = create_feedback(client, question="待处理问题")
+    resolved = create_feedback(client, question="已处理问题")
+
+    client.patch(
+        f"/api/feedbacks/{resolved['id']}",
+        json={
+            "status": "resolved",
+            "remark": "已确认回答正确",
+        },
+    )
+
+    response = client.get("/api/feedbacks?status=pending")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == pending["id"]
+
+
+def test_get_feedback_by_id(client: TestClient):
+    feedback = create_feedback(client, question="查询单条反馈")
+
+    response = client.get(f"/api/feedbacks/{feedback['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == feedback["id"]
+    assert data["question"] == "查询单条反馈"
+
+
+def test_update_feedback_to_resolved(client: TestClient):
+    feedback = create_feedback(client)
+
+    response = client.patch(
+        f"/api/feedbacks/{feedback['id']}",
+        json={
+            "status": "resolved",
+            "remark": "已重新核对数据，回答正确。",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "resolved"
+    assert data["remark"] == "已重新核对数据，回答正确。"
+    assert data["handled_at"] is not None
+
+
+def test_update_feedback_back_to_pending_clears_handled_at(client: TestClient):
+    feedback = create_feedback(client)
+
+    client.patch(
+        f"/api/feedbacks/{feedback['id']}",
+        json={
+            "status": "resolved",
+            "remark": "先标记为已处理",
+        },
+    )
+
+    response = client.patch(
+        f"/api/feedbacks/{feedback['id']}",
+        json={
+            "status": "pending",
+            "remark": "重新打开处理",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "pending"
+    assert data["remark"] == "重新打开处理"
+    assert data["handled_at"] is None
+
+
+def test_get_feedback_returns_404_when_not_found(client: TestClient):
+    response = client.get("/api/feedbacks/999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "feedback not found"
+```
+
+### 42.12 这些测试分别在验证什么
+
+`test_create_session`：
+
+```txt
+验证 POST /api/sessions 能创建会话。
+验证默认 pinned 是 false。
+验证新会话 messages 是空数组。
+```
+
+`test_list_sessions_returns_created_sessions`：
+
+```txt
+验证 GET /api/sessions 能返回已经创建过的会话。
+```
+
+这里不强行验证完整排序。
+
+因为这个测试只关心：
+
+```txt
+创建后的数据能不能被列表接口读出来。
+```
+
+排序单独交给置顶测试验证。
+
+`test_get_session_by_id`：
+
+```txt
+验证 GET /api/sessions/{id} 能读取单条会话。
+```
+
+`test_send_first_message_updates_default_title`：
+
+```txt
+验证第一次发送用户消息时，会话标题会从默认标题改成用户第一句话。
+验证后端会同时创建 user 消息和 assistant mock 回复。
+```
+
+这正好对应前面做过的逻辑：
+
+```txt
+一开始新建会话有默认标题。
+用户输入第一句话后，用第一句话覆盖默认标题。
+后续不再覆盖。
+```
+
+`test_send_second_message_does_not_change_title`：
+
+```txt
+验证第二次发送消息不会继续覆盖标题。
+```
+
+这个测试很关键。
+
+因为如果这里写错，历史记录标题会随着每次提问变化。
+
+`test_send_message_rejects_non_user_role`：
+
+```txt
+验证前端不能直接向接口发送 assistant 消息。
+```
+
+当前业务规则是：
+
+```txt
+用户只能提交 role=user。
+assistant 消息由后端 mock AI 生成。
+```
+
+`test_update_session_title_and_pinned`：
+
+```txt
+验证 PATCH 可以同时改标题和置顶状态。
+验证标题前后空格会被清理。
+```
+
+`test_update_session_rejects_empty_title`：
+
+```txt
+验证重命名不能为空。
+```
+
+`test_pinned_session_is_listed_first`：
+
+```txt
+验证置顶会话在列表里排在前面。
+```
+
+对应后端代码：
+
+```py
+.order_by(ChatSession.pinned.desc(), ChatSession.updated_at.desc())
+```
+
+`test_delete_session`：
+
+```txt
+验证 DELETE 删除会话返回 204。
+验证删除后再查询会返回 404。
+```
+
+这里还检查：
+
+```py
+assert delete_response.content == b""
+```
+
+因为 204 的意思就是：
+
+```txt
+请求成功，但没有响应 body。
+```
+
+`test_list_settings`：
+
+```txt
+验证 GET /api/settings 能返回应用配置列表。
+验证列表按 id 排序。
+验证 config 这种 JSONB 字段可以正常返回。
+```
+
+这里的配置数据不是通过 API 创建的，而是测试里直接写入测试数据库。
+
+原因是：
+
+```txt
+应用配置真实业务里来自 seed 初始化。
+后端没有提供 POST /api/settings。
+```
+
+`test_update_setting_enabled_and_config`：
+
+```txt
+验证 PATCH /api/settings/{code} 可以同时更新 enabled 和 config。
+```
+
+比如：
+
+```txt
+常问设置 threshold 从 3 改成 5。
+enabled 从 true 改成 false。
+```
+
+`test_update_setting_can_only_change_enabled`：
+
+```txt
+验证只传 enabled 时，只改开关，不破坏原来的 config。
+```
+
+`test_update_setting_can_only_change_config`：
+
+```txt
+验证只传 config 时，只改配置内容，不破坏原来的 enabled。
+```
+
+`test_update_setting_returns_404_when_code_not_found`：
+
+```txt
+验证更新不存在的配置 code 时返回 404。
+```
+
+这对应真实页面里的情况：
+
+```txt
+前端如果传错 code，后端不能静默成功。
+```
+
+`test_create_feedback`：
+
+```txt
+验证 POST /api/feedbacks 能创建反馈。
+验证新反馈默认 status 是 pending。
+验证 remark 和 handled_at 初始为空。
+```
+
+`test_list_feedbacks_with_pagination`：
+
+```txt
+验证 GET /api/feedbacks 支持 page 和 page_size。
+验证 total 是总数量。
+验证 items 是当前页数据。
+```
+
+`test_filter_feedbacks_by_question`：
+
+```txt
+验证能按 question 关键字筛选。
+```
+
+对应接口：
+
+```txt
+GET /api/feedbacks?question=北京
+```
+
+`test_filter_feedbacks_by_user`：
+
+```txt
+验证能按 user_name 筛选。
+```
+
+对应接口：
+
+```txt
+GET /api/feedbacks?user=李四
+```
+
+`test_filter_feedbacks_by_status`：
+
+```txt
+验证能按 pending / resolved 状态筛选。
+```
+
+对应接口：
+
+```txt
+GET /api/feedbacks?status=pending
+```
+
+`test_get_feedback_by_id`：
+
+```txt
+验证 GET /api/feedbacks/{feedback_id} 能读取单条反馈详情。
+```
+
+`test_update_feedback_to_resolved`：
+
+```txt
+验证 PATCH /api/feedbacks/{id} 可以把反馈处理为 resolved。
+验证处理后会写入 remark。
+验证处理后 handled_at 不为空。
+```
+
+`test_update_feedback_back_to_pending_clears_handled_at`：
+
+```txt
+验证反馈可以从 resolved 改回 pending。
+验证改回 pending 后 handled_at 会清空。
+```
+
+`test_get_feedback_returns_404_when_not_found`：
+
+```txt
+验证查询不存在的反馈 id 时返回 404。
+```
+
+### 42.13 先不测试 /health/db
+
+本轮可以测：
+
+```txt
+GET /health
+```
+
+但先不要测：
+
+```txt
+GET /health/db
+```
+
+原因是 `/health/db` 当前代码走的是：
+
+```py
+check_database_connection()
+```
+
+而 `check_database_connection()` 里面用的是 `app.db.session` 里全局创建的：
+
+```py
+engine
+```
+
+它不走：
+
+```py
+Depends(get_db)
+```
+
+所以 `dependency_overrides[get_db]` 替换不到它。
+
+如果要严谨测试 `/health/db`，后面可以做一次小重构：
+
+```txt
+让 health/db 也通过可替换的数据库依赖去检查连接。
+```
+
+但第 42 步先不做。
+
+现在先集中测三个页面的核心业务接口。
+
+### 42.14 本地运行后端测试
+
+先启动数据库：
+
+```bash
+docker compose up -d postgres
+```
+
+进入后端：
+
+```bash
+cd backend
+source .venv/bin/activate
+```
+
+安装测试依赖：
+
+```bash
+python -m pip install -r requirements-dev.txt
+```
+
+运行测试：
+
+```bash
+python -m pytest
+```
+
+如果只想看详细一点的输出：
+
+```bash
+python -m pytest -v
+```
+
+如果只想跑聊天接口测试：
+
+```bash
+python -m pytest tests/test_chat_api.py -v
+```
+
+如果只想跑应用配置接口测试：
+
+```bash
+python -m pytest tests/test_settings_api.py -v
+```
+
+如果只想跑回复校对接口测试：
+
+```bash
+python -m pytest tests/test_feedback_api.py -v
+```
+
+如果只想跑某一个测试：
+
+```bash
+python -m pytest tests/test_chat_api.py::test_delete_session -v
+```
+
+### 42.15 后端编译检查
+
+后端除了跑测试，也可以保留之前用过的编译检查：
+
+```bash
+python -m compileall app
+```
+
+它能检查：
+
+```txt
+Python 文件有没有基础语法错误。
+import 语句有没有明显语法问题。
+```
+
+它不能替代测试。
+
+区别是：
+
+```txt
+compileall：
+  只检查代码能不能被 Python 编译。
+
+pytest：
+  真正调用接口，验证接口结果。
+```
+
+第 42 步后端本地 check 可以组合成：
+
+```bash
+python -m compileall app
+python -m pytest
+```
+
+### 42.16 更新根目录 package.json
+
+第 41 步根目录已经有：
+
+```json
+{
+  "scripts": {
+    "frontend:check": "pnpm --dir frontend check",
+    "check": "pnpm frontend:check"
+  }
+}
+```
+
+第 42 步把后端也接进来：
+
+```json
+{
+  "scripts": {
+    "prepare": "husky",
+    "frontend:lint": "pnpm --dir frontend lint",
+    "frontend:test": "pnpm --dir frontend test",
+    "frontend:build": "pnpm --dir frontend build",
+    "frontend:check": "pnpm --dir frontend check",
+    "backend:compile": "cd backend && .venv/bin/python -m compileall app",
+    "backend:test": "cd backend && .venv/bin/python -m pytest",
+    "backend:check": "pnpm backend:compile && pnpm backend:test",
+    "check": "pnpm frontend:check && pnpm backend:check"
+  }
+}
+```
+
+这样根目录可以直接跑：
+
+```bash
+pnpm backend:test
+pnpm backend:check
+pnpm check
+```
+
+解释一下：
+
+```txt
+pnpm backend:test
+  只跑后端测试。
+
+pnpm backend:check
+  先 compileall，再 pytest。
+
+pnpm check
+  前端 lint/test/build + 后端 compileall/pytest。
+```
+
+这里脚本用了：
+
+```txt
+backend/.venv/bin/python
+```
+
+所以本地要保证：
+
+```txt
+backend/.venv 已经创建好。
+requirements-dev.txt 已经安装好。
+```
+
+### 42.17 更新 Husky
+
+第 41 步的策略是：
+
+```txt
+pre-commit 跑轻量检查。
+pre-push 跑完整前端检查。
+```
+
+第 42 步可以改成：
+
+```txt
+pre-commit：
+  仍然只跑 frontend lint。
+
+pre-push：
+  跑完整 pnpm check，也就是前端 + 后端。
+```
+
+原因：
+
+```txt
+commit 经常发生，不能太慢。
+push 频率低一些，更适合跑完整校验。
+```
+
+`.husky/pre-commit` 保持：
+
+```sh
+pnpm frontend:lint
+```
+
+`.husky/pre-push` 改成：
+
+```sh
+pnpm check
+```
+
+这样你 push 前会自动跑：
+
+```txt
+前端 lint
+前端 test
+前端 build
+后端 compileall
+后端 pytest
+```
+
+### 42.18 添加 GitHub Actions 后端检查
+
+第 41 步已经有：
+
+```txt
+.github/workflows/frontend-check.yml
+```
+
+第 42 步新增：
+
+```txt
+.github/workflows/backend-check.yml
+```
+
+内容：
+
+```yml
+name: Backend Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend-check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: fullstack_demo_test
+          POSTGRES_USER: archer
+          POSTGRES_PASSWORD: 123456
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U archer -d fullstack_demo_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Compile backend
+        run: python -m compileall app
+
+      - name: Run backend tests
+        run: python -m pytest
+        env:
+          DATABASE_URL: postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test
+          TEST_DATABASE_URL: postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test
+```
+
+### 42.19 后端 GitHub Actions 逐段解释
+
+`name: Backend Check`：
+
+```txt
+这个 workflow 在 GitHub Actions 页面显示的名字。
+```
+
+`on.push.branches.main`：
+
+```txt
+push 到 main 分支时运行。
+```
+
+`on.pull_request.branches.main`：
+
+```txt
+有人向 main 发 PR 时运行。
+```
+
+`runs-on: ubuntu-latest`：
+
+```txt
+GitHub 创建一台 Ubuntu 临时机器跑测试。
+```
+
+`services.postgres`：
+
+```txt
+给 CI 临时启动一个 PostgreSQL 容器。
+```
+
+因为后端测试需要数据库，所以 CI 不能只装 Python。
+
+它还要启动数据库。
+
+这一段：
+
+```yml
+env:
+  POSTGRES_DB: fullstack_demo_test
+  POSTGRES_USER: archer
+  POSTGRES_PASSWORD: 123456
+```
+
+意思是：
+
+```txt
+CI 里的 PostgreSQL 启动时自动创建 fullstack_demo_test 数据库。
+用户名 archer。
+密码 123456。
+```
+
+`ports`：
+
+```yml
+ports:
+  - 5432:5432
+```
+
+意思是：
+
+```txt
+把 PostgreSQL 容器里的 5432 端口映射到 CI 机器的 5432 端口。
+```
+
+这样 pytest 里连：
+
+```txt
+localhost:5432
+```
+
+就能连到 CI 里的 PostgreSQL。
+
+`options`：
+
+```yml
+options: >-
+  --health-cmd "pg_isready -U archer -d fullstack_demo_test"
+  --health-interval 10s
+  --health-timeout 5s
+  --health-retries 5
+```
+
+意思是：
+
+```txt
+让 GitHub Actions 等 PostgreSQL 真正启动成功后，再继续执行后面的步骤。
+```
+
+否则可能出现：
+
+```txt
+Python 测试已经开始跑了。
+但 PostgreSQL 还没准备好。
+然后连接失败。
+```
+
+`defaults.run.working-directory: backend`：
+
+```txt
+后面的 run 命令默认都在 backend 目录执行。
+```
+
+所以：
+
+```yml
+run: python -m pytest
+```
+
+实际等于：
+
+```bash
+cd backend
+python -m pytest
+```
+
+`actions/setup-python@v5`：
+
+```txt
+安装 Python。
+```
+
+`python-version: "3.12"`：
+
+```txt
+CI 使用 Python 3.12。
+```
+
+这和你之前因为依赖要求升级 Python 的方向一致。
+
+`cache: pip`：
+
+```txt
+缓存 pip 下载过的依赖。
+下次 CI 可以更快。
+```
+
+`cache-dependency-path: backend/requirements-dev.txt`：
+
+```txt
+当 requirements-dev.txt 变化时，刷新 pip 缓存。
+```
+
+`Install dependencies`：
+
+```yml
+run: python -m pip install -r requirements-dev.txt
+```
+
+意思是：
+
+```txt
+安装后端正式依赖 + 测试依赖。
+```
+
+`Compile backend`：
+
+```yml
+run: python -m compileall app
+```
+
+意思是：
+
+```txt
+检查 app 目录里的 Python 文件能不能正常编译。
+```
+
+`Run backend tests`：
+
+```yml
+run: python -m pytest
+```
+
+意思是：
+
+```txt
+执行 backend/tests 里的测试。
+```
+
+这里传了两个环境变量：
+
+```yml
+DATABASE_URL: postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test
+TEST_DATABASE_URL: postgresql+psycopg://archer:123456@localhost:5432/fullstack_demo_test
+```
+
+`TEST_DATABASE_URL`：
+
+```txt
+给 conftest.py 用。
+明确告诉测试连哪个数据库。
+```
+
+`DATABASE_URL`：
+
+```txt
+给项目本身的配置兜底。
+避免某些代码不小心读默认开发库地址。
+```
+
+### 42.20 常见报错和处理
+
+#### 42.20.1 database does not exist
+
+如果本地运行 pytest 报：
+
+```txt
+database "fullstack_demo_test" does not exist
+```
+
+说明测试库还没创建。
+
+执行：
+
+```bash
+docker compose exec postgres createdb -U archer fullstack_demo_test
+```
+
+#### 42.20.2 connection refused
+
+如果报：
+
+```txt
+connection refused
+```
+
+通常是 PostgreSQL 容器没启动。
+
+执行：
+
+```bash
+docker compose up -d postgres
+```
+
+#### 42.20.3 ModuleNotFoundError: No module named 'app'
+
+如果报：
+
+```txt
+ModuleNotFoundError: No module named 'app'
+```
+
+通常是 pytest 运行目录不对。
+
+要从 `backend` 目录运行：
+
+```bash
+cd backend
+python -m pytest
+```
+
+不要从项目根目录直接：
+
+```bash
+python -m pytest
+```
+
+除非你额外配置了 `PYTHONPATH`。
+
+#### 42.20.4 TestClient 相关错误
+
+如果报 `TestClient` 或 `httpx` 相关错误，通常是测试依赖没装。
+
+执行：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+```
+
+#### 42.20.5 relation does not exist
+
+如果报：
+
+```txt
+relation "chat_sessions" does not exist
+```
+
+说明测试表没有创建成功。
+
+重点检查：
+
+```txt
+conftest.py 是否 import 了 app.models。
+Base.metadata.create_all(bind=test_engine) 是否执行。
+TEST_DATABASE_URL 是否连到了正确的 PostgreSQL。
+```
+
+### 42.21 这一轮不做的事
+
+第 42 步不做：
+
+1. 不引入 Alembic 迁移测试。
+2. 不做覆盖率门槛。
+3. 不测试真实 AI。
+4. 不做 Playwright E2E。
+5. 不测试 `/health/db`。
+6. 不测试 seed 脚本的每一条默认配置内容。
+7. 不测试反馈筛选条件的所有排列组合。
+
+这些后面都可以加。
+
+但现在要把三个页面的核心接口都测通。
+
+### 42.22 验收标准
+
+完成后确认：
+
+1. `backend/requirements-dev.txt` 存在。
+2. `backend/tests/conftest.py` 存在。
+3. `backend/tests/test_chat_api.py` 存在。
+4. `backend/tests/test_settings_api.py` 存在。
+5. `backend/tests/test_feedback_api.py` 存在。
+6. 本地存在 `fullstack_demo_test` 测试数据库。
+7. `cd backend && python -m pytest` 通过。
+8. `cd backend && python -m compileall app` 通过。
+9. `pnpm backend:check` 通过。
+10. `pnpm check` 能同时跑前端和后端校验。
+11. `.husky/pre-push` 执行 `pnpm check`。
+12. `.github/workflows/backend-check.yml` 存在。
+13. GitHub Actions 会启动 PostgreSQL service。
+14. GitHub Actions 会执行 `python -m pytest`。
+15. 智能问数接口测试覆盖创建、列表、详情、发消息、标题更新、重命名、置顶、删除。
+16. 应用配置接口测试覆盖列表、更新 enabled、更新 config、不存在 code 返回 404。
+17. 回复校对接口测试覆盖创建、列表分页、筛选、详情、处理为 resolved、改回 pending、不存在 id 返回 404。
+18. 测试不会写入 `fullstack_demo` 开发库。
+19. 测试数据只出现在 `fullstack_demo_test` 测试库。
