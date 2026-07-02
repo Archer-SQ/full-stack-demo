@@ -5,7 +5,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import get_db
 from app.models import ChatMessage, ChatSession
-from app.schemas.chat import ChatMessageCreate, ChatSessionCreate, ChatSessionRead
+from app.schemas.chat import (
+    ChatMessageCreate,
+    ChatSessionCreate,
+    ChatSessionRead,
+    ChatSessionUpdate,
+)
 from app.services.mock_ai import generate_mock_answer
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -39,7 +44,7 @@ def list_sessions(db: Session = Depends(get_db)):
     return (
         db.query(ChatSession)
         .options(selectinload(ChatSession.messages))
-        .order_by(ChatSession.updated_at.desc())
+        .order_by(ChatSession.pinned.desc(), ChatSession.updated_at.desc())
         .all()
     )
 
@@ -50,6 +55,43 @@ def get_session(session_id: int, db: Session = Depends(get_db)):
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
+
+
+@router.patch("/{session_id}", response_model=ChatSessionRead)
+def update_session(
+    session_id: int, payload: ChatSessionUpdate, db: Session = Depends(get_db)
+):
+    session = _get_session_with_messages(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    if payload.title is not None:
+        title = " ".join(payload.title.strip().split())
+        if not title:
+            raise HTTPException(status_code=400, detail="title cannot be empty")
+        session.title = title[:200]
+
+    if payload.pinned is not None:
+        session.pinned = payload.pinned
+
+    session.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    updated_session = _get_session_with_messages(db, session.id)
+    if updated_session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return updated_session
+
+
+@router.delete("/{session_id}", status_code=204)
+def delete_session(session_id: int, db: Session = Depends(get_db)):
+    session = _get_session_with_messages(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    db.delete(session)
+    db.commit()
+    return None
 
 
 @router.post("/{session_id}/messages", response_model=ChatSessionRead)

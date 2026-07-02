@@ -33,8 +33,14 @@ class ChatSessionCreate(BaseModel):
 class ChatSessionRead(BaseModel):
     id: int
     title: str
+    pinned: bool = False
     created_at: datetime
     updated_at: datetime
     messages: list[ChatMessageRead] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+
+class ChatSessionUpdate(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
