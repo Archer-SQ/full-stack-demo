@@ -19068,7 +19068,440 @@ jobs:
         run: pnpm check
 ```
 
-解释：
+#### 41.11.1 这个文件放在哪里
+
+文件路径：
+
+```txt
+.github/workflows/frontend-check.yml
+```
+
+含义：
+
+```txt
+.github/workflows
+  GitHub Actions 约定读取 workflow 的目录。
+
+frontend-check.yml
+  这个 workflow 的配置文件名，可以自定义。
+```
+
+只要这个文件被提交到 GitHub，GitHub 就会自动识别它。
+
+#### 41.11.2 name
+
+```yml
+name: Frontend Check
+```
+
+含义：
+
+```txt
+这个 workflow 在 GitHub Actions 页面显示的名字。
+```
+
+比如 GitHub 页面里会看到：
+
+```txt
+Frontend Check
+```
+
+这个名字只影响展示，不影响执行逻辑。
+
+#### 41.11.3 on：什么时候触发
+
+```yml
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+```
+
+`on` 表示这个 workflow 什么时候运行。
+
+这里配置了两种触发方式。
+
+第一种：
+
+```yml
+push:
+  branches:
+    - main
+```
+
+含义：
+
+```txt
+只要有代码 push 到 main 分支，就运行这个 CI。
+```
+
+第二种：
+
+```yml
+pull_request:
+  branches:
+    - main
+```
+
+含义：
+
+```txt
+如果有人提交 PR，并且目标分支是 main，也运行这个 CI。
+```
+
+所以这个 workflow 会在这两种场景跑：
+
+```txt
+直接 push main
+提交/更新合并到 main 的 PR
+```
+
+#### 41.11.4 jobs：要跑哪些任务
+
+```yml
+jobs:
+  frontend-check:
+```
+
+`jobs` 表示这一套 workflow 里有哪些任务。
+
+这里目前只有一个任务：
+
+```txt
+frontend-check
+```
+
+这个名字可以自定义。
+
+如果以后要加后端检查，可以继续加：
+
+```yml
+jobs:
+  frontend-check:
+    ...
+
+  backend-check:
+    ...
+```
+
+当前第 41 步只做前端，所以只保留 `frontend-check`。
+
+#### 41.11.5 runs-on：运行环境
+
+```yml
+runs-on: ubuntu-latest
+```
+
+含义：
+
+```txt
+让 GitHub 提供一台临时的 Ubuntu Linux 虚拟机来跑这个任务。
+```
+
+它不是你的电脑。
+
+每次 CI 运行时，GitHub 都会准备一个干净环境：
+
+```txt
+拉代码
+装 Node
+装 pnpm
+装依赖
+跑检查
+任务结束后销毁环境
+```
+
+为什么用 `ubuntu-latest`：
+
+```txt
+前端构建和测试不依赖 macOS。
+Ubuntu 速度快、成本低，也是 CI 最常见选择。
+```
+
+#### 41.11.6 defaults.run.working-directory
+
+```yml
+defaults:
+  run:
+    working-directory: frontend
+```
+
+含义：
+
+```txt
+后面所有 run 命令，默认都在 frontend 目录执行。
+```
+
+所以这里：
+
+```yml
+- name: Install dependencies
+  run: pnpm install --frozen-lockfile
+
+- name: Run frontend check
+  run: pnpm check
+```
+
+实际等价于：
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm check
+```
+
+为什么要这样写：
+
+```txt
+因为当前前端 package.json 在 frontend 目录。
+pnpm check 也是 frontend/package.json 里的 script。
+```
+
+如果不写 `working-directory: frontend`，CI 会在仓库根目录执行：
+
+```bash
+pnpm check
+```
+
+但如果根目录没有对应脚本，就会失败。
+
+#### 41.11.7 steps：任务里的具体步骤
+
+```yml
+steps:
+```
+
+`steps` 表示这个 job 里按顺序执行哪些步骤。
+
+每个 step 都会从上往下执行。
+
+当前顺序是：
+
+```txt
+1. Checkout
+2. Setup pnpm
+3. Setup Node.js
+4. Install dependencies
+5. Run frontend check
+```
+
+#### 41.11.8 Checkout
+
+```yml
+- name: Checkout
+  uses: actions/checkout@v4
+```
+
+含义：
+
+```txt
+把 GitHub 仓库里的代码拉到 CI 虚拟机里。
+```
+
+如果没有这一步，后面的 CI 环境里没有你的项目代码。
+
+`uses` 表示使用别人已经写好的 GitHub Action。
+
+这里用的是官方 action：
+
+```txt
+actions/checkout@v4
+```
+
+`@v4` 是版本号。
+
+#### 41.11.9 Setup pnpm
+
+```yml
+- name: Setup pnpm
+  uses: pnpm/action-setup@v4
+  with:
+    version: 11.9.0
+```
+
+含义：
+
+```txt
+在 CI 机器里安装 pnpm。
+```
+
+为什么要装：
+
+```txt
+GitHub 的 Ubuntu 环境默认不一定有你项目需要的 pnpm 版本。
+```
+
+这里指定：
+
+```yml
+version: 11.9.0
+```
+
+是为了和你本地当前 pnpm 版本保持一致。
+
+#### 41.11.10 Setup Node.js
+
+```yml
+- name: Setup Node.js
+  uses: actions/setup-node@v4
+  with:
+    node-version: 22
+    cache: pnpm
+    cache-dependency-path: frontend/pnpm-lock.yaml
+```
+
+含义：
+
+```txt
+安装 Node.js 22。
+并开启 pnpm 依赖缓存。
+```
+
+`node-version: 22`：
+
+```txt
+指定 CI 使用 Node 22。
+```
+
+`cache: pnpm`：
+
+```txt
+告诉 GitHub Actions 缓存 pnpm 下载过的依赖。
+下次 CI 可以更快。
+```
+
+`cache-dependency-path: frontend/pnpm-lock.yaml`：
+
+```txt
+告诉 GitHub：用 frontend/pnpm-lock.yaml 判断缓存是否需要更新。
+```
+
+如果 `pnpm-lock.yaml` 变化，说明依赖可能变了，缓存就会刷新。
+
+#### 41.11.11 Install dependencies
+
+```yml
+- name: Install dependencies
+  run: pnpm install --frozen-lockfile
+```
+
+因为前面设置了：
+
+```yml
+working-directory: frontend
+```
+
+所以这一步实际在执行：
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+```
+
+`--frozen-lockfile` 的意思：
+
+```txt
+严格按照 pnpm-lock.yaml 安装。
+如果 package.json 和 pnpm-lock.yaml 对不上，直接失败。
+```
+
+为什么 CI 要这样：
+
+```txt
+CI 应该验证仓库里提交的锁文件是否完整可靠。
+不能让 CI 自动改 lockfile。
+```
+
+如果你本地新增依赖后忘了提交 `pnpm-lock.yaml`，这一步会失败。
+
+这正是它的价值。
+
+#### 41.11.12 Run frontend check
+
+```yml
+- name: Run frontend check
+  run: pnpm check
+```
+
+因为前面设置了 `working-directory: frontend`，所以实际执行：
+
+```bash
+cd frontend
+pnpm check
+```
+
+而 `frontend/package.json` 里：
+
+```json
+"check": "pnpm lint && pnpm test && pnpm build"
+```
+
+所以 CI 最终会按顺序跑：
+
+```txt
+pnpm lint
+pnpm test
+pnpm build
+```
+
+也就是：
+
+```txt
+代码规范检查
+前端测试
+TypeScript + Vite 构建
+```
+
+任何一步失败，GitHub Actions 都会失败。
+
+#### 41.11.13 整个 workflow 的执行流程
+
+完整流程可以理解成：
+
+```txt
+push / PR 到 main
+-> GitHub 创建 Ubuntu 临时机器
+-> Checkout 拉代码
+-> 安装 pnpm
+-> 安装 Node 22
+-> 进入 frontend 目录
+-> pnpm install --frozen-lockfile
+-> pnpm check
+-> lint/test/build 都通过，CI 成功
+-> 任意一步失败，CI 失败
+```
+
+#### 41.11.14 和 Husky 的区别
+
+Husky：
+
+```txt
+在你本机运行。
+commit / push 前触发。
+可以被跳过。
+依赖你本机环境。
+```
+
+GitHub Actions：
+
+```txt
+在 GitHub 服务器运行。
+push / PR 后触发。
+更适合当团队最终门禁。
+环境更干净。
+```
+
+所以两者关系是：
+
+```txt
+Husky 提前帮你发现问题。
+GitHub Actions 最终确认远程代码没问题。
+```
+
+简短解释：
 
 ```txt
 defaults.run.working-directory: frontend
