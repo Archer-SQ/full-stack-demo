@@ -1,3 +1,7 @@
+export type RequestOptions = {
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  body?: unknown
+}
 // 设置
 export type AppSetting = {
   id: number
@@ -59,9 +63,15 @@ export type ChatMessage = {
 export type ChatSession = {
   id: number
   title: string
+  pinned: boolean
   created_at: string
   updated_at: string
   messages: ChatMessage[]
+}
+
+export type UpdateSessionPayload = {
+  title?: string
+  pinned?: boolean
 }
 
 // 反馈

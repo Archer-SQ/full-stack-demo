@@ -16532,9 +16532,10 @@ node_modules/.bin/vite build
 目标效果：
 
 ```txt
-鼠标 hover 到某一条历史记录上：右侧出现三个点按钮。
-鼠标继续 hover 到三个点按钮上：出现 tooltip 操作栏。
+鼠标 hover 到某一条历史记录上：右侧出现无边框三个点图标按钮。
+鼠标继续 hover 到三个点按钮区域：出现操作菜单。
 操作栏包含：重命名、置顶/取消置顶、删除。
+鼠标离开三个点区域后：操作菜单隐藏。
 ```
 
 注意：
@@ -16810,18 +16811,56 @@ frontend/src/api/types.ts
 pinned: boolean
 ```
 
-### 40.10 历史记录项 hover 三点按钮
+### 40.10 历史记录项三点菜单组件
 
 修改：
 
 ```txt
+frontend/src/components/ChatHistoryItem.tsx
 frontend/src/pages/ChatPage.tsx
 frontend/src/styles/chat.css
 ```
 
-历史记录项结构从单纯文本按钮，改成左侧标题 + 右侧操作按钮。
+历史记录项结构从单纯文本按钮，改成一个单独组件：
 
-结构方向：
+```txt
+ChatPage
+  负责列表数据、当前选中会话、当前打开哪个菜单。
+
+ChatHistoryItem
+  负责一条历史记录的展示、三点按钮、菜单 UI。
+```
+
+这样做的原因：
+
+```txt
+历史记录是列表项，后面会继续加置顶、重命名、删除。
+如果都写在 ChatPage 里，ChatPage 会越来越大。
+
+拆成 ChatHistoryItem 后，每一行自己的 UI 更清楚。
+再配合 memo，可以减少父组件更新时不必要的子项重渲染。
+```
+
+先说明截图里这个问题：
+
+```txt
+三点按钮显示成了一个带边框、带背景的默认按钮。
+```
+
+这和原型不一致。
+
+原型里历史记录项右侧的更多操作应该更轻：
+
+- 默认不显示。
+- hover 当前历史记录时显示三点按钮。
+- 点击三点按钮后打开菜单。
+- 显示时是一个透明图标按钮，不要明显边框。
+- 点击菜单项后菜单要消失。
+- 不要让三点按钮把历史记录项高度撑大。
+
+所以第 40.10 以后不要用浏览器默认按钮样式。
+
+不要再用这个结构：
 
 ```tsx
 <button
@@ -16845,36 +16884,140 @@ frontend/src/styles/chat.css
 </button>
 ```
 
-注意：
+问题有两个：
 
-外层已经是 `button` 时，里面不能再嵌套 `button`，HTML 语义不合法。
+1. 外层已经是 `button`，里面不能再嵌套 `button`，HTML 语义不合法。
+2. 现在菜单被遮住，核心不是 hover 错，而是父元素 `overflow: hidden` 把菜单裁掉了。
 
-所以最终实现时要二选一：
-
-1. 把历史记录项外层改成 `div role="button"`。
-2. 或者外层不再用 `button`，改成 `div`，内部标题区域负责选择会话，更多按钮负责菜单。
-
-第 40 步采用第二种：
+最终改成这种结构方向：
 
 ```tsx
-<div className="chat-history-item ..." role="button" tabIndex={0} onClick={...}>
-  ...
-  <button type="button" ...>
-    <MoreVertical />
-  </button>
-</div>
+const historyItems = useMemo(() => {
+  return sessions.map(session => (
+    <ChatHistoryItem
+      key={session.id}
+      session={session}
+      isActive={session.id === activeSessionId}
+      isMenuOpen={openActionSessionId === session.id}
+      onSelectSession={handleSelectSession}
+      onToggleMenu={handleToggleActionMenu}
+    />
+  ))
+}, [
+  sessions,
+  activeSessionId,
+  openActionSessionId,
+  handleSelectSession,
+  handleToggleActionMenu,
+])
 ```
+
+解释：
+
+- `historyItems`：把历史列表渲染结果缓存起来。
+- `useMemo`：依赖没变时复用上一次的渲染结果。
+- `openActionSessionId === session.id`：当前这条记录的菜单是否打开。
+- `handleSelectSession` / `handleToggleActionMenu`：用 `useCallback` 固定函数引用。
+- `ChatHistoryItem`：用 `memo` 包起来，父组件刷新时，props 没变的历史项可以跳过重渲染。
+- `.chat-history-item`：一条历史记录的外壳。
+- `.chat-history-select`：负责选中会话，样式上看起来像整条记录。
+- `.chat-history-title`：负责标题单行省略。
+- `.chat-history-more-button`：右侧三个点按钮。
+- `.chat-history-menu`：点击三点按钮后出现的菜单。
+- 菜单项前面要有图标，和原型保持一致。
+
+注意：
+
+- 外层不要再写成 `button`。
+- 三点按钮不要用默认边框按钮样式。
+- 菜单里可以放 `button`，因为外层不再是 button。
+- 不要在 `.chat-history-item` 上写 `overflow: hidden`，否则菜单一定会被裁掉。
+- 标题省略交给 `.chat-history-title`，不要交给整条 item。
+- 这一小步只做菜单显隐，不做置顶、重命名、删除的真实业务。
 
 ### 40.11 操作浮层显示规则
 
-CSS 规则：
+使用 React 状态控制菜单显隐。
+
+原因：
 
 ```txt
-hover 历史记录项：显示三个点按钮
-hover 三个点区域：显示操作浮层
+菜单不只是 hover 展示。
+点击三点按钮后，菜单需要保持打开。
+点击菜单项后，菜单需要立即消失。
+
+这种交互有“当前打开的是哪一个菜单”的状态，
+所以适合用 `openActionSessionId` 管理。
 ```
 
-样式：
+这里不是用状态去做置顶、删除、重命名。
+这里只控制菜单打开/关闭。
+
+当前 bug 的关键有两个：
+
+1. 菜单被父元素裁掉。
+2. 纯 hover 会导致鼠标从三点移动到菜单时容易丢失 hover。
+
+当前样式里如果有：
+
+```css
+.chat-history-item {
+  overflow: hidden;
+}
+```
+
+要删掉。
+
+因为 `.chat-history-menu` 是 `.chat-history-item` 的子元素，父元素 `overflow: hidden` 会把超出当前 40px 高度的菜单裁掉。
+
+注意：这里不是简单把 `overflow: hidden` 改成 `overflow: visible` 就结束。
+
+如果标题文本还是直接靠 `.chat-history-item` 做省略，改成 `visible` 后省略号会消失，这是正常现象。
+
+正确拆法是：
+
+```txt
+.chat-history-item
+  负责一整条历史记录的布局和菜单定位，允许浮层溢出。
+
+.chat-history-title
+  只负责标题文本的单行省略。
+
+.chat-history-menu
+  负责浮窗菜单的定位、层级、阴影和按钮样式。
+```
+
+还要处理一个 hover 断层问题：
+
+```txt
+如果三点按钮和菜单之间有几像素空隙，
+鼠标从三点移到菜单的过程中会离开 hover 区域，
+菜单就会在鼠标到达之前消失。
+```
+
+所以需要给 `.chat-history-more-wrap` 增加一个透明的 `::before` 桥接区。
+
+这个桥接区不显示任何内容，只是把三点按钮和菜单之间的空白也纳入 hover 区域。
+
+也就是说：
+
+```txt
+不要让同一个元素同时负责：
+1. 裁剪标题省略
+2. 承载外溢菜单
+```
+
+这两个职责冲突。
+
+如果坚持让菜单继续放在 `.chat-history-item` 里面，只改 `.chat-history-menu` 的 `z-index`、`position`、`box-shadow` 都不够。
+
+原因：
+
+```txt
+z-index 只能解决层级问题，不能突破父元素 overflow hidden 的裁剪边界。
+```
+
+标题省略改放到标题 span 上：
 
 ```css
 .chat-history-item {
@@ -16882,36 +17025,113 @@ hover 三个点区域：显示操作浮层
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 38px;
+  border-radius: 8px;
+  overflow: visible;
+}
+
+.chat-history-select {
+  min-width: 0;
+  flex: 1;
+  height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-history-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-history-more-wrap {
   position: relative;
   flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
   opacity: 0;
   pointer-events: none;
 }
 
-.chat-history-item:hover .chat-history-more-wrap {
+.chat-history-item:hover .chat-history-more-wrap,
+.chat-history-item.menu-open .chat-history-more-wrap {
   opacity: 1;
   pointer-events: auto;
 }
 
-.chat-history-menu {
+.chat-history-more-button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #475467;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.chat-history-more-button:hover,
+.chat-history-more-wrap:hover .chat-history-more-button,
+.chat-history-more-button[aria-expanded='true'] {
+  background: #eef3ff;
+  color: #2563eb;
+}
+
+.chat-history-more-wrap::before {
+  content: '';
   position: absolute;
   top: 28px;
-  right: 0;
-  z-index: 30;
-  min-width: 120px;
+  right: -4px;
   display: none;
+  width: 136px;
+  height: 8px;
+}
+
+.chat-history-more-wrap:hover::before,
+.chat-history-item.menu-open .chat-history-more-wrap::before {
+  display: block;
+}
+
+.chat-history-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: -4px;
+  z-index: 30;
+  min-width: 132px;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 8px 24px rgb(15 23 42 / 12%);
   padding: 4px;
+  display: none;
+  white-space: nowrap;
 }
 
-.chat-history-more-wrap:hover .chat-history-menu {
-  display: block;
+.chat-history-more-wrap:hover .chat-history-menu,
+.chat-history-item.menu-open .chat-history-menu {
+  display: grid;
+}
+
+.chat-history-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-history-menu button svg {
+  flex: 0 0 auto;
 }
 ```
 
@@ -16925,117 +17145,82 @@ hover 三个点区域：显示操作浮层
 
 删除项用危险色。
 
-### 40.12 置顶操作
+如果菜单仍然被裁掉，再检查上层是否有影响菜单浮出的 `overflow: hidden`。
 
-点击置顶：
+优先处理顺序：
+
+1. 先删 `.chat-history-item` 的 `overflow: hidden`。
+2. 标题省略移到 `.chat-history-title`。
+3. 确认 `.chat-history-menu` 的 `z-index` 高于历史项。
+4. 如果菜单要浮出历史栏宽度，再考虑调整更外层容器的 overflow。
+
+这一版使用 `openActionSessionId`：
 
 ```tsx
-await updateSession(session.id, { pinned: !session.pinned })
+const [openActionSessionId, setOpenActionSessionId] = useState<number | null>(null)
 ```
 
-成功后：
-
-1. 用返回的会话更新 `sessions`。
-2. 重新排序，让置顶会话在上面。
-
-前端排序可以写一个 helper：
-
-```ts
-const sortSessions = (items: ChatSession[]) => {
-  return [...items].sort((prev, next) => {
-    if (prev.pinned !== next.pinned) {
-      return Number(next.pinned) - Number(prev.pinned)
-    }
-    return new Date(next.updated_at).getTime() - new Date(prev.updated_at).getTime()
-  })
-}
-```
-
-### 40.13 重命名弹窗
-
-新增组件：
+含义：
 
 ```txt
-frontend/src/components/RenameSessionModal.tsx
+null：没有任何菜单打开。
+数字 id：这个 id 对应的历史记录菜单正在打开。
 ```
 
-必须使用：
+### 40.12 三个操作函数的整体拆法
+
+从这里开始，历史记录菜单里的三个动作按三个函数写：
 
 ```tsx
-import AppModal from './AppModal'
+const handleRename = useCallback(() => {}, [])
+const handleUp = useCallback(() => {}, [])
+const handleDelete = useCallback(() => {}, [])
 ```
 
-不使用：
+这三个函数分别对应一整套逻辑：
 
 ```txt
-window.prompt
+handleRename
+  打开重命名弹窗 -> 确认提交 -> 调接口 -> 更新 sessions -> 关闭弹窗
+
+handleUp
+  点击置顶/取消置顶 -> 调接口 -> 更新 sessions -> 重新排序 -> 关闭菜单
+
+handleDelete
+  打开删除弹窗 -> 确认删除 -> 调接口 -> 更新 sessions -> 处理当前选中会话 -> 关闭弹窗
 ```
 
-弹窗内容：
+注意：
 
-1. 标题：`重命名会话`
-2. 输入框：默认填入当前会话标题
-3. 取消按钮
-4. 确认按钮
+- 不要把三个动作混在一个 `handleSessionAction(type, session)` 里。
+- 不要在 JSX 里直接写一长串接口和状态更新逻辑。
+- 菜单项点击后先进入对应函数，具体逻辑都放在函数里。
+- `ChatHistoryItem` 只负责把当前点击的 `session` 传出来，不负责真正改数据。
 
-确认时：
+### 40.13 先补共享状态和工具函数
 
-```tsx
-await updateSession(session.id, { title: renameTitle })
-```
-
-成功后：
-
-1. 更新 `sessions`。
-2. 关闭弹窗。
-3. 当前选中会话不变。
-
-### 40.14 删除确认弹窗
-
-新增组件：
+先明确状态职责：
 
 ```txt
-frontend/src/components/DeleteSessionModal.tsx
+openActionSessionId
+  只负责三点菜单打开/关闭。
+
+renamingSession
+  只负责当前正在重命名哪条会话。
+
+deletingSession
+  只负责当前准备删除哪条会话。
+
+sessionActionLoading
+  负责重命名、置顶、删除提交中的 loading。
 ```
 
-必须使用：
+这样写虽然状态多一个，但每个名字都能直接说明用途。
+
+在 `ChatPage.tsx` 里补这些状态：
 
 ```tsx
-import AppModal from './AppModal'
-```
-
-不使用：
-
-```txt
-window.confirm
-```
-
-弹窗内容：
-
-1. 标题：`删除会话`
-2. 文案：`删除后，该会话及其消息记录将无法恢复。`
-3. 显示会话标题
-4. 取消按钮
-5. 删除按钮
-
-确认删除时：
-
-```tsx
-await deleteSession(session.id)
-```
-
-成功后：
-
-1. 从 `sessions` 里移除该会话。
-2. 如果删除的是当前选中会话，自动选中剩余列表第一条。
-3. 如果没有剩余会话，`selectedSessionId` 设为 `null`。
-4. 关闭弹窗。
-
-### 40.15 ChatPage 需要新增的状态
-
-在 `ChatPage.tsx` 增加：
-
-```tsx
+const [openActionSessionId, setOpenActionSessionId] = useState<number | null>(null)
 const [renamingSession, setRenamingSession] = useState<ChatSession | null>(null)
 const [deletingSession, setDeletingSession] = useState<ChatSession | null>(null)
 const [sessionActionLoading, setSessionActionLoading] = useState(false)
@@ -17043,11 +17228,371 @@ const [sessionActionLoading, setSessionActionLoading] = useState(false)
 
 用途：
 
-1. `renamingSession` 控制重命名弹窗。
-2. `deletingSession` 控制删除确认弹窗。
-3. `sessionActionLoading` 控制按钮 loading/disabled。
+- `openActionSessionId === null`：当前没有打开任何三点菜单。
+- `openActionSessionId === session.id`：当前这条历史记录的菜单打开。
+- `renamingSession === null`：当前没有打开重命名弹窗。
+- `renamingSession` 有值：当前正在重命名这条会话。
+- `deletingSession === null`：当前没有打开删除确认弹窗。
+- `deletingSession` 有值：当前准备删除这条会话。
+- `sessionActionLoading`：重命名、置顶、删除共用的提交中状态。
 
-### 40.16 本轮不做的事
+`renameTitle` 不建议放在 `ChatPage`。
+
+原因：
+
+```txt
+renameTitle 只服务于重命名弹窗里的 input。
+ChatPage 不需要关心用户正在输入的每一个字符。
+```
+
+所以把输入框状态放到 `RenameSessionModal` 组件内部更合适。
+`ChatPage` 只接收最终确认后的标题：
+
+```tsx
+onConfirm={(nextTitle) => void handleConfirmRename(nextTitle)}
+```
+
+菜单打开/关闭用 `openActionSessionId`：
+
+```tsx
+const handleToggleActionMenu = useCallback((sessionId: number) => {
+  setOpenActionSessionId(currentSessionId =>
+    currentSessionId === sessionId ? null : sessionId
+  )
+}, [])
+```
+
+解释：
+
+- 如果点的是已经打开的菜单，就关闭它。
+- 如果点的是另一条历史记录，就切换到另一条。
+
+再补一个排序 helper：
+
+```ts
+const sortSessions = (items: ChatSession[]) => {
+  return [...items].sort((prev, next) => {
+    if (prev.pinned !== next.pinned) {
+      return Number(next.pinned) - Number(prev.pinned)
+    }
+
+    return new Date(next.updated_at).getTime() - new Date(prev.updated_at).getTime()
+  })
+}
+```
+
+解释：
+
+- `return [...items]`：先复制数组，不直接改原数组。
+- `prev.pinned !== next.pinned`：如果一个置顶、一个没置顶，置顶的排前面。
+- `Number(true)` 是 `1`，`Number(false)` 是 `0`。
+- `updated_at` 越新的时间戳越大，所以用 `next - prev` 做倒序。
+
+这个 helper 后面给 `handleRename` 和 `handleUp` 都能用。
+
+建议把 `sortSessions` 放在 `ChatPage` 组件外面。
+原因是它不依赖组件内部状态，放外面后不会在每次渲染时重新创建。
+
+还要确认前端 API 已经有：
+
+```ts
+updateSession(sessionId, payload)
+deleteSession(sessionId)
+```
+
+### 40.14 handleRename：重命名整套逻辑
+
+`handleRename` 负责重命名的完整闭环。
+
+函数形态：
+
+```tsx
+const handleRename = useCallback((session: ChatSession) => {
+  setRenamingSession(session)
+  setOpenActionSessionId(null)
+}, [])
+```
+
+这个函数只做“打开弹窗前的准备”：
+
+1. 把当前点击的会话放进 `renamingSession`。
+2. 关闭三点菜单。
+
+为什么不是在 `handleRename` 里直接调接口？
+
+因为点击菜单里的“重命名”时，用户还没有输入新名字。
+这一步只是打开弹窗。
+真正调接口应该放到确认按钮对应的方法里。
+
+所以还需要一个确认函数：
+
+```tsx
+const handleConfirmRename = useCallback(async (title: string) => {
+  if (!renamingSession || sessionActionLoading) {
+    return
+  }
+
+  const nextTitle = title.trim()
+
+  if (!nextTitle) {
+    return
+  }
+
+  setSessionActionLoading(true)
+  setError(null)
+
+  const result = await toAsyncResult(
+    updateSession(renamingSession.id, { title: nextTitle })
+  )
+
+  if (result.ok === false) {
+    setError(result.error)
+    setSessionActionLoading(false)
+    return
+  }
+
+  setSessions(currentSessions =>
+    sortSessions(
+      currentSessions.map(session =>
+        session.id === result.data.id ? result.data : session
+      )
+    )
+  )
+  setRenamingSession(null)
+  setSessionActionLoading(false)
+}, [renamingSession, sessionActionLoading, setError, setSessions])
+```
+
+解释：
+
+- `!renamingSession`：当前没有打开重命名弹窗，不继续。
+- `sessionActionLoading`：正在提交时不重复提交。
+- `title.trim()`：去掉用户输入首尾空格。
+- `!nextTitle`：空标题不提交。
+- `updateSession(id, { title })`：调用后端 PATCH 接口。
+- `map`：只替换被重命名的那条会话，其它会话保持原样。
+- `sortSessions`：重命名后后端可能更新 `updated_at`，所以重新排序。
+- 成功后关闭弹窗。
+
+对应弹窗组件：
+
+```txt
+frontend/src/components/RenameSessionModal.tsx
+```
+
+弹窗要求：
+
+- 复用 `AppModal`。
+- 不使用 `window.prompt`。
+- 输入框状态放在 `RenameSessionModal` 内部。
+- 初始值使用传入的 `session.title`。
+- 点击确认时，把最终标题传给 `onConfirm(title)`。
+- 取消时执行：
+
+```tsx
+setRenamingSession(null)
+```
+
+### 40.15 handleUp：置顶 / 取消置顶整套逻辑
+
+这里函数名按你给的叫 `handleUp`。
+
+`handleUp` 负责点击“置顶 / 取消置顶”之后的完整逻辑。
+
+函数形态：
+
+```tsx
+const handleUp = useCallback(
+  async (session: ChatSession) => {
+    if (sessionActionLoading) {
+      return
+    }
+
+    setSessionActionLoading(true)
+    setError(null)
+    setOpenActionSessionId(null)
+
+    const result = await toAsyncResult(
+      updateSession(session.id, { pinned: !session.pinned })
+    )
+
+    if (result.ok === false) {
+      setError(result.error)
+      setSessionActionLoading(false)
+      return
+    }
+
+    setSessions(currentSessions =>
+      sortSessions(
+        currentSessions.map(currentSession =>
+          currentSession.id === result.data.id ? result.data : currentSession
+        )
+      )
+    )
+    setSessionActionLoading(false)
+  },
+  [sessionActionLoading, setError, setSessions]
+)
+```
+
+解释：
+
+- `session`：当前点击菜单的那条历史记录。
+- `!session.pinned`：如果当前没置顶，就改成置顶；如果已经置顶，就取消置顶。
+- `setOpenActionSessionId(null)`：点完菜单项后关闭菜单。
+- `updateSession(session.id, { pinned: !session.pinned })`：调后端 PATCH 接口。
+- `result.data`：后端返回更新后的完整会话。
+- `map`：用后端返回的新会话替换旧会话。
+- `sortSessions`：保证置顶项排上面，同置顶状态按更新时间倒序。
+
+这里不需要弹窗。
+
+菜单文案：
+
+```tsx
+{session.pinned ? '取消置顶' : '置顶'}
+```
+
+图标：
+
+```tsx
+{session.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+```
+
+### 40.16 handleDelete：删除整套逻辑
+
+`handleDelete` 负责删除的完整闭环。
+
+函数形态：
+
+```tsx
+const handleDelete = useCallback((session: ChatSession) => {
+  setDeletingSession(session)
+  setOpenActionSessionId(null)
+}, [])
+```
+
+这个函数只做“打开删除确认弹窗”：
+
+1. 把当前点击的会话放进 `deletingSession`。
+2. 关闭三点菜单。
+
+为什么不直接删除？
+
+因为删除是危险操作，原型里也应该走确认弹窗。
+所以点击菜单里的“删除”只是打开弹窗。
+
+真正删除放到确认函数：
+
+```tsx
+const handleConfirmDelete = useCallback(async () => {
+  if (!deletingSession || sessionActionLoading) {
+    return
+  }
+
+  setSessionActionLoading(true)
+  setError(null)
+
+  const deletedSessionId = deletingSession.id
+  const result = await toAsyncResult(deleteSession(deletedSessionId))
+
+  if (result.ok === false) {
+    setError(result.error)
+    setSessionActionLoading(false)
+    return
+  }
+
+  const nextSessions = sessions.filter(session => session.id !== deletedSessionId)
+
+  setSessions(nextSessions)
+
+  if (selectedSessionId === deletedSessionId) {
+    setSelectedSessionId(nextSessions[0]?.id ?? null)
+  }
+
+  setDeletingSession(null)
+  setSessionActionLoading(false)
+}, [
+  deletingSession,
+  sessions,
+  selectedSessionId,
+  sessionActionLoading,
+  setError,
+  setSessions,
+])
+```
+
+解释：
+
+- `!deletingSession`：当前没有打开删除确认弹窗，不继续。
+- `deletedSessionId`：先把 id 存出来，避免后面状态变化影响逻辑。
+- `deleteSession(id)`：调用后端 DELETE 接口。
+- `nextSessions`：从当前 `sessions` 中过滤掉被删除的会话。
+- `setSessions(nextSessions)`：更新历史列表。
+- 如果删除的是当前选中的会话，就自动选中剩余第一条。
+- 如果剩余列表为空，就把 `selectedSessionId` 设为 `null`。
+- 成功后关闭弹窗。
+
+对应弹窗组件：
+
+```txt
+frontend/src/components/DeleteSessionModal.tsx
+```
+
+弹窗要求：
+
+- 复用 `AppModal`。
+- 不使用 `window.confirm`。
+- 展示当前会话标题。
+- 取消时执行：
+
+```tsx
+setDeletingSession(null)
+```
+
+### 40.17 ChatHistoryItem 需要接收的函数
+
+`ChatHistoryItem` 不直接写业务逻辑，只接收三个操作函数：
+
+```tsx
+type ChatHistoryItemProps = {
+  session: ChatSession
+  isActive: boolean
+  isMenuOpen: boolean
+  onSelectSession: (sessionId: number) => void
+  onToggleMenu: (sessionId: number) => void
+  onRename: (session: ChatSession) => void
+  onUp: (session: ChatSession) => void
+  onDelete: (session: ChatSession) => void
+}
+```
+
+菜单项点击：
+
+```tsx
+<button type="button" onClick={() => onRename(session)}>
+  <Pencil size={14} />
+  <span>重命名</span>
+</button>
+
+<button type="button" onClick={() => onUp(session)}>
+  {session.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+  <span>{session.pinned ? '取消置顶' : '置顶'}</span>
+</button>
+
+<button className="danger" type="button" onClick={() => onDelete(session)}>
+  <Trash2 size={14} />
+  <span>删除</span>
+</button>
+```
+
+解释：
+
+- 子组件只把 `session` 交给父组件。
+- 父组件 `ChatPage` 才知道怎么调接口、怎么更新 `sessions`。
+- 这样 `ChatHistoryItem` 还是一个展示型组件，职责更清楚。
+
+### 40.18 本轮不做的事
 
 这一轮只做历史记录项操作。
 
@@ -17060,7 +17605,7 @@ const [sessionActionLoading, setSessionActionLoading] = useState(false)
 - 不做批量删除。
 - 不做移动端适配。
 
-### 40.17 构建和检查
+### 40.19 构建和检查
 
 后端检查：
 
@@ -17083,13 +17628,13 @@ node_modules/.bin/tsc -b
 node_modules/.bin/vite build
 ```
 
-### 40.18 验收标准
+### 40.20 验收标准
 
 完成第 40 步后，确认：
 
-1. 鼠标 hover 历史记录项时，右侧出现三个点按钮。
+1. 鼠标 hover 历史记录项时，右侧出现无边框三个点图标按钮。
 2. 鼠标移开历史记录项时，三个点按钮隐藏。
-3. 鼠标 hover 三个点按钮区域时，出现操作浮层。
+3. 鼠标 hover 三个点区域时，出现操作菜单。
 4. 操作浮层包含：重命名、置顶/取消置顶、删除。
 5. 点击重命名，打开基于 `AppModal` 的重命名弹窗。
 6. 重命名确认后，历史记录标题更新并保存到数据库。
@@ -17103,13 +17648,13 @@ node_modules/.bin/vite build
 14. `python -m compileall app` 通过。
 15. 前端构建通过。
 
-你现在只做：
+你现在按这个顺序做：
 
-1. 修改后端会话模型、schema 和 router。
-2. 修改前端 chat API 和类型。
-3. 在历史记录项上补 hover 三点和操作浮层。
-4. 新增基于 `AppModal` 的重命名弹窗。
-5. 新增基于 `AppModal` 的删除确认弹窗。
+1. 先补共享状态、`sortSessions`、`updateSession`、`deleteSession`。
+2. 写 `handleRename` 和 `handleConfirmRename`，并接入 `RenameSessionModal`。
+3. 写 `handleUp`，完成置顶 / 取消置顶。
+4. 写 `handleDelete` 和 `handleConfirmDelete`，并接入 `DeleteSessionModal`。
+5. 把 `handleRename`、`handleUp`、`handleDelete` 传给 `ChatHistoryItem`。
 6. 执行后端检查和前端构建。
 
 ## Handoff：2026-07-02 晚间交接
