@@ -7,6 +7,9 @@ __pycache__/
 .env
 backend/.env
 
+# Node
+node_modules/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
@@ -16,4 +19,3 @@ frontend/dist/
 
 # System
 .DS_Store
-
