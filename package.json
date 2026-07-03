@@ -6,7 +6,10 @@
     "frontend:test": "pnpm --dir frontend test",
     "frontend:build": "pnpm --dir frontend build",
     "frontend:check": "pnpm --dir frontend check",
-    "check": "pnpm frontend:check"
+    "backend:compile": "cd backend && .venv/bin/python -m compileall app",
+    "backend:test": "cd backend && .venv/bin/python -m pytest",
+    "backend:check": "pnpm backend:compile && pnpm backend:test",
+    "check": "pnpm frontend:check && pnpm backend:check"
   },
   "devDependencies": {
     "husky": "^9.1.7"
