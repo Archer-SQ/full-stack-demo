@@ -21691,7 +21691,7 @@ TEST_DATABASE_URL 是否连到了正确的 PostgreSQL。
 13. GitHub Actions 会启动 PostgreSQL service。
 14. GitHub Actions 会执行 `python -m pytest`。
 15. 智能问数接口测试覆盖创建、列表、详情、发消息、标题更新、重命名、置顶、删除。
-16. 应用配置接口测试覆盖列表、更新 enabled、更新 config、不存在 code 会返回 404。
+16. 应用配置接口测试覆盖列表、更新 enabled、更新 config、不存在 code 返回 404。
 17. 回复校对接口测试覆盖创建、列表分页、筛选、详情、处理为 resolved、改回 pending、不存在 id 返回 404。
 18. 测试不会写入 `fullstack_demo` 开发库。
 19. 测试数据只出现在 `fullstack_demo_test` 测试库。
