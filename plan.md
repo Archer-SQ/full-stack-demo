@@ -21695,3 +21695,656 @@ TEST_DATABASE_URL 是否连到了正确的 PostgreSQL。
 17. 回复校对接口测试覆盖创建、列表分页、筛选、详情、处理为 resolved、改回 pending、不存在 id 返回 404。
 18. 测试不会写入 `fullstack_demo` 开发库。
 19. 测试数据只出现在 `fullstack_demo_test` 测试库。
+
+## 第 43 步：接入真实大模型，并保留多模型通道
+
+当前后端回答来自：
+
+```txt
+backend/app/services/mock_ai.py
+```
+
+也就是固定 mock 数据。
+
+这一轮目标是：
+
+```txt
+保留 mock，用于本地测试和 CI。
+新增真实大模型 provider，先接通义千问。
+预留 OpenAI、DeepSeek、其它 OpenAI-compatible 模型通道。
+```
+
+不要直接在 `chat.py` 里写通义千问请求代码。
+
+原因：
+
+```txt
+chat.py 是业务流程：
+保存用户消息 -> 调 AI -> 保存 assistant 消息 -> 返回会话。
+
+调用哪家模型，是服务实现细节。
+如果把通义千问代码直接写进 chat.py，
+后面换 OpenAI / DeepSeek / 其它模型时，chat.py 会越来越乱。
+```
+
+这一轮要拆成：
+
+```txt
+chat.py
+  只调用 generate_ai_answer(...)
+
+ai_service.py
+  根据 AI_PROVIDER 选择具体 provider
+
+providers/
+  mock_provider.py
+  openai_compatible_provider.py
+```
+
+### 43.1 为什么优先用 OpenAI-compatible 接口
+
+通义千问的百炼服务支持 OpenAI 兼容接口。
+
+官方文档的核心意思是：
+
+```txt
+把 API Key、BASE_URL、model 名称换成阿里云百炼的配置，
+就可以用 OpenAI SDK 调用千问模型。
+```
+
+这对我们很有价值。
+
+因为很多模型服务现在都提供类似接口：
+
+```txt
+OpenAI
+通义千问 / 阿里云百炼
+DeepSeek
+Moonshot / Kimi
+智谱 GLM
+部分本地模型网关
+```
+
+它们虽然供应商不同，但调用形态大多类似：
+
+```py
+client.chat.completions.create(
+    model="xxx",
+    messages=[...],
+)
+```
+
+所以我们可以先做一个通用 provider：
+
+```txt
+OpenAICompatibleProvider
+```
+
+以后换模型时优先改配置：
+
+```env
+AI_PROVIDER=qwen
+AI_MODEL=qwen-plus
+AI_BASE_URL=https://xxx/compatible-mode/v1
+AI_API_KEY=sk-xxx
+```
+
+而不是到处改代码。
+
+### 43.2 需要新增的依赖
+
+修改：
+
+```txt
+backend/requirements.txt
+```
+
+新增：
+
+```txt
+openai
+```
+
+说明：
+
+```txt
+这里不是只为了 OpenAI。
+通义千问百炼也可以通过 OpenAI SDK 的兼容接口调用。
+```
+
+安装：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pip install openai
+python -m pip freeze > requirements.txt
+```
+
+注意：
+
+```txt
+不要把 API Key 写进 requirements.txt、代码、测试文件、GitHub。
+```
+
+### 43.3 配置环境变量
+
+修改：
+
+```txt
+backend/.env.example
+backend/app/core/config.py
+```
+
+`.env.example` 增加：
+
+```env
+AI_PROVIDER=mock
+AI_MODEL=qwen-plus
+AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+AI_API_KEY=
+AI_TEMPERATURE=0.2
+AI_TIMEOUT_SECONDS=30
+```
+
+含义：
+
+```txt
+AI_PROVIDER
+  当前使用哪个模型供应商。
+  mock：继续使用本地 mock。
+  qwen：使用通义千问。
+  openai：预留 OpenAI。
+  deepseek：预留 DeepSeek。
+  custom：预留其它 OpenAI-compatible 服务。
+
+AI_MODEL
+  模型名称。
+  通义千问可以先用 qwen-plus。
+
+AI_BASE_URL
+  OpenAI-compatible 服务地址。
+  通义千问百炼是 compatible-mode/v1 结尾。
+
+AI_API_KEY
+  模型服务 API Key。
+  本地写在 .env，不能提交到 Git。
+
+AI_TEMPERATURE
+  控制回答随机性。
+  业务分析类回答建议低一点，比如 0.2。
+
+AI_TIMEOUT_SECONDS
+  模型请求超时时间。
+```
+
+`backend/app/core/config.py` 增加：
+
+```py
+AI_PROVIDER = os.getenv("AI_PROVIDER", "mock")
+AI_MODEL = os.getenv("AI_MODEL", "qwen-plus")
+AI_BASE_URL = os.getenv("AI_BASE_URL", "")
+AI_API_KEY = os.getenv("AI_API_KEY", "")
+AI_TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.2"))
+AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "30"))
+```
+
+注意：
+
+```txt
+本地开发默认 AI_PROVIDER=mock。
+这样没有 API Key 时，项目仍然能跑。
+CI 也不会因为没有真实大模型 Key 而失败。
+```
+
+### 43.4 定义统一返回结构
+
+新增文件：
+
+```txt
+backend/app/services/ai_types.py
+```
+
+代码方向：
+
+```py
+from typing import Any, TypedDict
+
+
+class AIAnswer(TypedDict):
+    content: str
+    answer_data: dict[str, Any] | None
+    elapsed_ms: int
+    token_count: int | None
+```
+
+为什么要定义这个？
+
+因为现在 `mock_ai.generate_mock_answer` 返回的是：
+
+```py
+{
+    "content": ...,
+    "answer_data": ...,
+    "elapsed_ms": ...,
+    "token_count": ...,
+}
+```
+
+真实大模型也要返回同样结构。
+
+这样 `chat.py` 不需要关心回答来自 mock 还是真实模型。
+
+### 43.5 保留 mock provider
+
+新增目录：
+
+```txt
+backend/app/services/ai_providers/
+```
+
+新增文件：
+
+```txt
+backend/app/services/ai_providers/mock_provider.py
+```
+
+先把原来的：
+
+```txt
+backend/app/services/mock_ai.py
+```
+
+保留或移动成：
+
+```txt
+backend/app/services/ai_providers/mock_provider.py
+```
+
+对外暴露：
+
+```py
+def generate_answer(question: str, history: list[dict[str, str]] | None = None) -> AIAnswer:
+    ...
+```
+
+这里的 `history` 先预留。
+
+当前 mock 可以暂时不用它。
+
+原因：
+
+```txt
+真实大模型需要上下文 messages。
+mock 不需要，但函数签名保持一致。
+```
+
+### 43.6 新增 OpenAI-compatible provider
+
+新增文件：
+
+```txt
+backend/app/services/ai_providers/openai_compatible_provider.py
+```
+
+代码方向：
+
+```py
+import time
+
+from openai import OpenAI
+
+from app.core.config import (
+    AI_API_KEY,
+    AI_BASE_URL,
+    AI_MODEL,
+    AI_TEMPERATURE,
+    AI_TIMEOUT_SECONDS,
+)
+from app.services.ai_types import AIAnswer
+
+
+SYSTEM_PROMPT = """
+你是一个企业经营数据分析助手。
+请用简洁中文回答用户问题。
+如果问题涉及数据分析，请给出清晰结论。
+"""
+
+
+def _build_messages(question: str, history: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT.strip()}]
+
+    if history:
+        messages.extend(history)
+
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def generate_answer(question: str, history: list[dict[str, str]] | None = None) -> AIAnswer:
+    if not AI_API_KEY:
+        raise RuntimeError("AI_API_KEY is required when using real AI provider")
+
+    started_at = time.perf_counter()
+
+    client = OpenAI(
+        api_key=AI_API_KEY,
+        base_url=AI_BASE_URL,
+        timeout=AI_TIMEOUT_SECONDS,
+    )
+
+    completion = client.chat.completions.create(
+        model=AI_MODEL,
+        messages=_build_messages(question, history),
+        temperature=AI_TEMPERATURE,
+    )
+
+    content = completion.choices[0].message.content or ""
+    usage = completion.usage
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+
+    return {
+        "content": content,
+        "answer_data": None,
+        "elapsed_ms": max(elapsed_ms, 1),
+        "token_count": usage.total_tokens if usage else None,
+    }
+```
+
+解释：
+
+- `OpenAI`：OpenAI SDK 客户端。
+- `base_url`：供应商地址。通义千问百炼填 compatible-mode/v1 地址。
+- `model`：模型名，比如 `qwen-plus`。
+- `messages`：对话上下文。
+- `temperature`：回答随机性。
+- `completion.choices[0].message.content`：模型回复文本。
+- `completion.usage.total_tokens`：token 用量，如果供应商返回了就记录。
+
+这一步先让真实模型返回纯文本。
+
+`answer_data` 先返回 `None`。
+
+原因：
+
+```txt
+当前前端的图表结构 answer_data 是我们 mock 出来的固定格式。
+真实大模型默认只会返回自然语言。
+
+如果要让真实模型也生成表格 / 统计 / 图表，
+下一步再做“结构化输出 JSON schema”。
+```
+
+### 43.7 新增 AI service 入口
+
+新增文件：
+
+```txt
+backend/app/services/ai_service.py
+```
+
+代码方向：
+
+```py
+from app.core.config import AI_PROVIDER
+from app.services.ai_types import AIAnswer
+from app.services.ai_providers import mock_provider, openai_compatible_provider
+
+
+def generate_ai_answer(
+    question: str,
+    history: list[dict[str, str]] | None = None,
+) -> AIAnswer:
+    if AI_PROVIDER == "mock":
+        return mock_provider.generate_answer(question, history)
+
+    if AI_PROVIDER in {"qwen", "openai", "deepseek", "custom"}:
+        return openai_compatible_provider.generate_answer(question, history)
+
+    raise RuntimeError(f"Unsupported AI_PROVIDER: {AI_PROVIDER}")
+```
+
+解释：
+
+```txt
+chat.py 以后只 import generate_ai_answer。
+AI_PROVIDER 决定具体走哪个 provider。
+```
+
+这里为什么把 `qwen/openai/deepseek/custom` 都先走同一个 provider？
+
+因为它们都可以按 OpenAI-compatible 方式接入。
+
+差异主要通过环境变量控制：
+
+```txt
+AI_BASE_URL
+AI_API_KEY
+AI_MODEL
+```
+
+以后如果某个供应商有特殊逻辑，再单独拆 provider。
+
+### 43.8 修改 chat.py
+
+修改：
+
+```txt
+backend/app/routers/chat.py
+```
+
+把：
+
+```py
+from app.services.mock_ai import generate_mock_answer
+```
+
+改成：
+
+```py
+from app.services.ai_service import generate_ai_answer
+```
+
+把：
+
+```py
+mock_result = generate_mock_answer(payload.content)
+```
+
+改成：
+
+```py
+history_messages = [
+    {"role": message.role, "content": message.content}
+    for message in session.messages
+    if message.role in {"user", "assistant"}
+]
+
+ai_result = generate_ai_answer(payload.content, history_messages)
+```
+
+然后 assistant message 改用：
+
+```py
+assistant_message = ChatMessage(
+    session_id=session.id,
+    role="assistant",
+    content=ai_result["content"],
+    answer_data=ai_result["answer_data"],
+    elapsed_ms=ai_result["elapsed_ms"],
+    token_count=ai_result["token_count"],
+)
+```
+
+注意：
+
+```txt
+这里需要让 session 查询带上 messages。
+否则 session.messages 可能没加载。
+```
+
+可以把发送消息开头的查询改成：
+
+```py
+session = _get_session_with_messages(db, session_id)
+```
+
+### 43.9 异常处理策略
+
+真实大模型会出现这些问题：
+
+```txt
+API Key 没配
+网络超时
+模型服务限流
+余额不足
+供应商接口返回错误
+```
+
+这一轮先用简单策略：
+
+```py
+try:
+    ai_result = generate_ai_answer(payload.content, history_messages)
+except Exception as exc:
+    raise HTTPException(status_code=502, detail="AI service unavailable") from exc
+```
+
+解释：
+
+- `502` 表示后端作为网关调用外部 AI 服务失败。
+- 不要把真实 API Key、供应商原始报错完整返回给前端。
+- 真实项目里还应该加日志，这个 demo 先不展开。
+
+### 43.10 本地 .env 示例
+
+本地继续 mock：
+
+```env
+AI_PROVIDER=mock
+```
+
+切通义千问：
+
+```env
+AI_PROVIDER=qwen
+AI_MODEL=qwen-plus
+AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+AI_API_KEY=你的百炼APIKey
+AI_TEMPERATURE=0.2
+AI_TIMEOUT_SECONDS=30
+```
+
+如果使用百炼新版业务空间专属域名，`AI_BASE_URL` 按控制台地域和 WorkspaceId 调整。
+
+例如北京地域官方文档形态是：
+
+```txt
+https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+```
+
+### 43.11 测试策略
+
+这一轮测试仍然默认跑 mock。
+
+原因：
+
+```txt
+CI 不能依赖真实大模型。
+真实模型有费用、网络、限流、API Key 风险。
+```
+
+所以测试环境保持：
+
+```env
+AI_PROVIDER=mock
+```
+
+已有 chat API 测试不应该因为接入真实模型而变慢或不稳定。
+
+可以新增一个轻量测试：
+
+```txt
+AI_PROVIDER=mock 时，send message 仍然返回 assistant 消息。
+```
+
+不要在 CI 里测真实 Qwen。
+
+真实 Qwen 只做本地手动验证。
+
+### 43.12 手动验证步骤
+
+1. 安装依赖：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+2. `.env` 切换：
+
+```env
+AI_PROVIDER=qwen
+AI_MODEL=qwen-plus
+AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+AI_API_KEY=你的百炼APIKey
+```
+
+3. 重启后端：
+
+```bash
+uvicorn app.main:app --reload
+```
+
+4. 前端发一条问题：
+
+```txt
+请分析北京代表处今年的收入完成情况
+```
+
+5. 观察：
+
+```txt
+assistant 消息是否变成真实模型回复。
+elapsed_ms 是否有值。
+token_count 是否有值或为 null。
+```
+
+### 43.13 本轮不做的事
+
+这一轮不做：
+
+1. 不做流式输出。
+2. 不做 RAG。
+3. 不做 embedding。
+4. 不做工具调用 function calling。
+5. 不做结构化图表 JSON 生成。
+6. 不把 API Key 存数据库。
+7. 不在 CI 调真实模型。
+8. 不做模型供应商管理页面。
+
+这些可以后面拆。
+
+下一轮如果要继续增强，可以做：
+
+```txt
+第 44 步：让真实大模型返回结构化 answer_data，恢复表格、统计、图表渲染。
+```
+
+### 43.14 验收标准
+
+完成后确认：
+
+1. `backend/requirements.txt` 包含 `openai`。
+2. `backend/.env.example` 包含 AI 相关环境变量。
+3. `backend/app/core/config.py` 读取 AI 相关环境变量。
+4. `backend/app/services/ai_types.py` 存在。
+5. `backend/app/services/ai_providers/mock_provider.py` 存在。
+6. `backend/app/services/ai_providers/openai_compatible_provider.py` 存在。
+7. `backend/app/services/ai_service.py` 存在。
+8. `chat.py` 不再直接 import `mock_ai`。
+9. `chat.py` 只调用 `generate_ai_answer`。
+10. `AI_PROVIDER=mock` 时，现有测试继续通过。
+11. `AI_PROVIDER=qwen` 且配置 API Key 后，本地可以得到真实模型回复。
+12. `.env` 不提交 API Key。
